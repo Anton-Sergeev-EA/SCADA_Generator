@@ -1,0 +1,20 @@
+# Прямые зависимости проекта. Раньше requirements.txt был "заморожен"
+# как pip freeze (30+ строк с точными версиями транзитивных пакетов),
+# включая fastapi/uvicorn/starlette/pydantic — ни один из них нигде
+# в кодовой базе не импортируется (REST API в проекте нет вообще) —
+# и modbus_tk/pyserial, нужные только удалённому Tkinter-прототипу
+# (main.py). Оставлены только пакеты, которые реально импортируются
+# в scada_core/, run.py, modbus_emulator_new.py и test_*.py.
+
+asyncpg==0.31.0
+pyModbusTCP==0.3.0
+python-dotenv==1.2.2
+PyYAML==6.0.3
+
+# cryptography иногда требуется asyncpg для SCRAM-SHA-256
+# аутентификации, в зависимости от настроек сервера PostgreSQL.
+cryptography==50.0.0
+
+# Используется в test_*.py (ручные скрипты проверки, не полноценный
+# pytest-сьют — см. README).
+pytest==9.1.1

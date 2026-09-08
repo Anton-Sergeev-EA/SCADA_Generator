@@ -1,0 +1,58 @@
+# Конфиденциальные данные
+.env
+*.env
+config.local.json
+secrets/
+*.key
+*.pem
+
+# Базы данных
+*.db
+*.sqlite3
+*.sql
+pgdata/
+
+# Логи
+*.log
+logs/
+log/
+
+# Кэш Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Системные файлы
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Распределенные файлы
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Временные файлы
+*.tmp
+*.temp
+.cache
+
+# Файлы проекта
+config.json
