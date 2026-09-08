@@ -1,0 +1,89 @@
+name: CI
+
+# Раньше в проекте не было CI вообще. Полноценных pytest-тестов тоже
+# нет (test_*.py — ручные скрипты проверки, запускаемые вручную рядом
+# с работающим эмулятором/PostgreSQL), поэтому этот workflow сделан по
+# минимуму, но не бесполезно:
+#   1. Проверка, что все модули scada_core вообще импортируются
+#      (поймало бы, например, синтаксическую ошибку или опечатку в
+#      импорте до того, как это увидит пользователь).
+#   2. Реальный сквозной smoke-test: поднимаем сам эмулятор
+#      (modbus_emulator_new.py) и настоящий PostgreSQL, прогоняем
+#      ручные тестовые скрипты против них — именно так был найден и
+#      подтверждён баг с пустым списком tags в config.yaml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  import-check:
+    name: Import sanity check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: |
+          python3 -c "
+          from scada_core.config.loader import get_config, ConfigLoader
+          from scada_core.database.repository import get_repository, DatabaseRepository
+          from scada_core.engine.modbus_client import AsyncModbusManager
+          from scada_core.engine.data_poller import DataPoller
+          print('OK: все модули scada_core импортируются')
+          "
+
+  smoke-test:
+    name: Emulator + PostgreSQL smoke test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: scada
+          POSTGRES_PASSWORD: scada_ci_password
+          POSTGRES_DB: scada_generator
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_NAME: scada_generator
+      DB_USER: scada
+      DB_PASSWORD: scada_ci_password
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+
+      - name: Start Modbus emulator
+        run: |
+          python3 modbus_emulator_new.py > emulator.log 2>&1 &
+          sleep 2
+
+      - name: Run modbus_client smoke test (test_simple.py)
+        run: python3 test_simple.py
+
+      - name: Run DataPoller + PostgreSQL smoke test (test_poller.py)
+        # Скрипт сам работает 30с (await asyncio.sleep(30)) и штатно
+        # завершается — ждём с запасом, без принудительного kill.
+        run: timeout 45 python3 test_poller.py
+
+      - name: Show emulator log on failure
+        if: failure()
+        run: cat emulator.log
