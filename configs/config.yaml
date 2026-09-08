@@ -1,0 +1,28 @@
+devices:
+  - id: plc_main
+    name: "Основной ПЛК"
+    enabled: true
+    host: localhost
+    port: 5020
+    slave_id: 1
+    # Раньше здесь не было ни одного тега — DataPoller._poll_device()
+    # успешно подключался к устройству, но тут же возвращал None
+    # (tags = config.get('tags', []) — пусто, поэтому нечего было
+    # читать), то есть система молча ничего не делала "из коробки".
+    # Адреса ниже соответствуют тому, что реально отдаёт
+    # modbus_emulator_new.py: регистр 0 — имитация температуры
+    # (50-249), регистр 1 — имитация давления (0-199).
+    tags:
+      - name: temperature
+        function: holding_register
+        address: 0
+        count: 1
+        scale: 1.0
+        alarm_high: 200
+        alarm_low: 40
+      - name: pressure
+        function: holding_register
+        address: 1
+        count: 1
+        scale: 1.0
+        alarm_high: 180
