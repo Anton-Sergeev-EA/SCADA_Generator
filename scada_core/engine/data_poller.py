@@ -1,181 +1,188 @@
 """
-Modbus device polling scheduler
+Modbus device polling scheduler.
+
+Каждое устройство опрашивается собственной задачей со своим периодом
+(poll_interval_ms), теги читаются блоками. Поллер только собирает
+данные; алармы и аналитика обрабатываются подписчиками (см. runtime.py).
 """
+
+from __future__ import annotations
+
 import asyncio
+import inspect
 import logging
-from typing import Dict, List, Any, Optional
-from datetime import datetime
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+
+from scada_core.config.loader import AppConfig, DeviceConfig, TagConfig, load_app_config
+from scada_core.engine.codec import decode, plan_blocks
 from scada_core.engine.modbus_client import AsyncModbusManager
-from scada_core.config.loader import get_config
 
 logger = logging.getLogger(__name__)
 
+QUALITY_GOOD = "GOOD"
+QUALITY_BAD = "BAD"
+QUALITY_COMM = "COMM_FAIL"
+
+
+@dataclass
 class TagValue:
-    """Tag value with metadata"""
-    def __init__(self, device_id: str, tag_name: str, value: Any, quality: str = "GOOD"):
-        self.device_id = device_id
-        self.tag_name = tag_name
-        self.value = value
-        self.timestamp = datetime.now()
-        self.quality = quality
+    """Tag value with metadata. ts — секунды UNIX (UTC)."""
+
+    device_id: str
+    tag_name: str
+    value: float | None
+    quality: str = QUALITY_GOOD
+    ts: float = field(default_factory=time.time)
+
+    @property
+    def key(self) -> str:
+        return f"{self.device_id}/{self.tag_name}"
+
+    @property
+    def timestamp(self) -> datetime:
+        return datetime.fromtimestamp(self.ts, tz=timezone.utc)
+
+
+DataCallback = Callable[[list[TagValue]], Awaitable[None] | None]
+StatusCallback = Callable[[str, bool, str | None], Awaitable[None] | None]
+
+
+async def _maybe_await(result: Any) -> None:
+    if inspect.isawaitable(result):
+        await result
+
 
 class DataPoller:
-    """Modbus device polling scheduler"""
-    
-    def __init__(self):
-        self._devices: Dict[str, AsyncModbusManager] = {}
-        self._config = get_config()
+    """Modbus device polling scheduler."""
+
+    def __init__(self, config: AppConfig | None = None) -> None:
+        self._config = config or load_app_config()
+        self._devices: dict[str, AsyncModbusManager] = {}
+        self._tasks: list[asyncio.Task] = []
+        self._data_callbacks: list[DataCallback] = []
+        self._status_callbacks: list[StatusCallback] = []
+        self._online: dict[str, bool] = {}
         self._is_running = False
-        self._poller_task = None
-        self._alarm_callbacks = []
-        self._data_callbacks = []
-        
-    def add_callback(self, callback_type: str, callback):
-        """Add callback for data or alarm events"""
+        self.cycles = 0
+
+    def add_callback(self, callback_type: str, callback: Callable) -> None:
+        """Register a callback: "data" (list[TagValue]) or "status" (device_id, online, error)."""
         if callback_type == "data":
             self._data_callbacks.append(callback)
-        elif callback_type == "alarm":
-            self._alarm_callbacks.append(callback)
-    
-    async def start(self):
-        """Start the polling scheduler"""
+        elif callback_type == "status":
+            self._status_callbacks.append(callback)
+        else:
+            raise ValueError(f"unknown callback type: {callback_type!r}")
+
+    def client(self, device_id: str) -> AsyncModbusManager | None:
+        return self._devices.get(device_id)
+
+    def device_online(self, device_id: str) -> bool:
+        return self._online.get(device_id, False)
+
+    @property
+    def is_running(self) -> bool:
+        return self._is_running
+
+    async def start(self) -> None:
         if self._is_running:
             return
-        
-        devices_config = self._config.get_devices()
-        if not devices_config:
+        devices = self._config.active_devices
+        if not devices:
             logger.warning("No active devices configured")
             return
-        
-        for device_cfg in devices_config:
-            client = AsyncModbusManager(
-                host=device_cfg['host'],
-                port=device_cfg.get('port', 502),
-                slave_id=device_cfg.get('slave_id', 1),
-                timeout=device_cfg.get('timeout', 3.0),
-                max_retries=device_cfg.get('retries', 3)
-            )
-            self._devices[device_cfg['id']] = client
-            logger.info(f"Device added: {device_cfg['name']}")
-        
         self._is_running = True
-        self._poller_task = asyncio.create_task(self._poll_loop())
+        for dev in devices:
+            client = AsyncModbusManager(
+                host=dev.host,
+                port=dev.port,
+                slave_id=dev.slave_id,
+                timeout=dev.timeout,
+                max_retries=dev.retries,
+            )
+            self._devices[dev.id] = client
+            self._tasks.append(asyncio.create_task(self._device_loop(dev, client)))
+            logger.info("Device added: %s (%s:%s)", dev.name.get("ru", dev.id), dev.host, dev.port)
         logger.info("DataPoller started")
-    
-    async def stop(self):
-        """Stop the polling scheduler"""
+
+    async def stop(self) -> None:
+        if not self._is_running:
+            return
         self._is_running = False
-        if self._poller_task:
-            self._poller_task.cancel()
-            try:
-                await self._poller_task
-            except asyncio.CancelledError:
-                pass
-        
+        for task in self._tasks:
+            task.cancel()
+        await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
         for client in self._devices.values():
             await client.disconnect()
-        
         logger.info("DataPoller stopped")
-    
-    async def _poll_loop(self):
-        """Main polling loop"""
-        while self._is_running:
-            start_time = datetime.now()
-            
-            try:
-                tasks = []
-                for device_id, client in self._devices.items():
-                    device_config = self._get_device_config(device_id)
-                    if device_config:
-                        tasks.append(self._poll_device(device_id, client, device_config))
-                
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                
-                for result in results:
-                    if isinstance(result, Exception):
-                        logger.error(f"Polling error: {result}")
-                    elif result:
-                        for callback in self._data_callbacks:
-                            await callback(result)
-                        
-            except Exception as e:
-                logger.error(f"Error in polling loop: {e}")
-            
-            elapsed = (datetime.now() - start_time).total_seconds() * 1000
-            await asyncio.sleep(max(0, 1000 - elapsed))
-    
-    async def _poll_device(self, device_id: str, client: AsyncModbusManager, config: dict):
-        """Poll a single device"""
-        try:
-            if not await client.connect():
-                return None
-            
-            tags = config.get('tags', [])
-            if not tags:
-                return None
-            
-            results = []
-            for tag in tags:
-                try:
-                    value = await self._read_tag(client, tag)
-                    if value is not None:
-                        tag_value = TagValue(device_id, tag['name'], value)
-                        results.append(tag_value)
-                        await self._check_alarms(tag, value)
-                except Exception as e:
-                    logger.error(f"Error reading {tag['name']}: {e}")
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"Device error for {device_id}: {e}")
-            return None
-    
-    async def _read_tag(self, client: AsyncModbusManager, tag: dict) -> Optional[Any]:
-        """Read a single tag from device"""
-        function = tag.get('function', 'holding_register')
-        address = tag.get('address', 0)
-        count = tag.get('count', 1)
-        
-        if function == 'holding_register':
-            raw_value = await client.read_holding_registers(address, count)
-        elif function == 'coil':
-            raw_value = await client.read_coils(address, count)
-        else:
-            return None
-        
-        if raw_value is None:
-            return None
-        
-        scale = tag.get('scale', 1.0)
-        if isinstance(raw_value, list):
-            return raw_value[0] * scale if count == 1 else [v * scale for v in raw_value]
-        return raw_value * scale
-    
-    async def _check_alarms(self, tag: dict, value: Any):
-        """Check tag value against alarm thresholds"""
-        if not self._alarm_callbacks:
-            return
-        
-        if not isinstance(value, (int, float)):
-            return
-        
-        alarm_low = tag.get('alarm_low')
-        alarm_high = tag.get('alarm_high')
-        
-        if alarm_low is not None and value < alarm_low:
-            for callback in self._alarm_callbacks:
-                await callback(tag['name'], value, 'LOW', f"Below {alarm_low}")
-        
-        if alarm_high is not None and value > alarm_high:
-            for callback in self._alarm_callbacks:
-                await callback(tag['name'], value, 'HIGH', f"Above {alarm_high}")
-    
-    def _get_device_config(self, device_id: str) -> Optional[dict]:
-        """Get device configuration by ID"""
-        devices = self._config.get_devices()
-        for device in devices:
-            if device['id'] == device_id:
-                return device
-        return None
 
+    async def _set_online(self, device_id: str, online: bool, error: str | None) -> None:
+        if self._online.get(device_id) == online:
+            return
+        self._online[device_id] = online
+        for cb in self._status_callbacks:
+            try:
+                await _maybe_await(cb(device_id, online, error))
+            except Exception:
+                logger.exception("status callback failed")
+
+    async def _device_loop(self, dev: DeviceConfig, client: AsyncModbusManager) -> None:
+        period = dev.poll_interval_ms / 1000.0
+        blocks = plan_blocks(list(dev.tags))
+        next_t = time.monotonic()
+        while self._is_running:
+            try:
+                values = await self.poll_device(dev, client, blocks)
+                self.cycles += 1
+                for cb in self._data_callbacks:
+                    try:
+                        await _maybe_await(cb(values))
+                    except Exception:
+                        logger.exception("data callback failed")
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Polling error on %s", dev.id)
+            next_t += period
+            delay = next_t - time.monotonic()
+            if delay < 0:  # не успели — не пытаемся «догонять» пачкой запросов
+                next_t = time.monotonic()
+                delay = 0
+            await asyncio.sleep(delay)
+
+    async def poll_device(
+        self, dev: DeviceConfig, client: AsyncModbusManager, blocks: list[dict] | None = None
+    ) -> list[TagValue]:
+        """Один цикл опроса устройства. Возвращает значения всех тегов;
+        при отсутствии связи — с качеством COMM_FAIL, чтобы оператор
+        видел потерю связи, а не «замёрзшие» цифры."""
+        blocks = blocks if blocks is not None else plan_blocks(list(dev.tags))
+        ts = time.time()
+        if not await client.connect():
+            await self._set_online(dev.id, False, client.last_error)
+            return [TagValue(dev.id, t.name, None, QUALITY_COMM, ts) for t in dev.tags]
+
+        values: list[TagValue] = []
+        for block in blocks:
+            count = block["end"] - block["start"]
+            raw = await client.read(block["function"], block["start"], count)
+            tag: TagConfig
+            for tag in block["tags"]:
+                if raw is None:
+                    quality = QUALITY_BAD if client.is_connected else QUALITY_COMM
+                    values.append(TagValue(dev.id, tag.name, None, quality, ts))
+                    continue
+                off = tag.address - block["start"]
+                try:
+                    value = decode(tag, raw[off : off + tag.register_count])
+                    values.append(TagValue(dev.id, tag.name, value, QUALITY_GOOD, ts))
+                except (IndexError, ValueError) as exc:
+                    logger.error("Decode error %s/%s: %s", dev.id, tag.name, exc)
+                    values.append(TagValue(dev.id, tag.name, None, QUALITY_BAD, ts))
+        await self._set_online(dev.id, client.is_connected, client.last_error)
+        return values
