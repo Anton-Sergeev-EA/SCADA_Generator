@@ -1,28 +1,187 @@
+# SCADA Generator — конфигурация установки.
+#
+# Из этого файла система строит ВСЁ: опрос Modbus, алармы, ML-модели
+# и мнемосхему оператора. Новые устройства и теги добавляются только здесь.
+#
+# Поля тега (обязательны только name и address):
+#   function   holding_register | input_register | coil | discrete_input
+#   type       uint16 | int16 | uint32 | int32 | float32  (для регистров)
+#   scale/offset  инженерное значение = raw * scale + offset
+#   alarm_hh / alarm_high / alarm_low / alarm_ll — пороги алармов
+#   deadband   зона возврата аларма (гистерезис), on_delay_s — задержка
+#   widget     tank | pump | valve | gauge | thermometer | flow | value | indicator
+#              (если не задан — выбирается автоматически)
+#   group      узел мнемосхемы; writable — разрешена запись оператором
+#   label      строка или словарь {ru, en, zh}
+
+project:
+  name:
+    ru: "Насосная станция №1"
+    en: "Pump Station No. 1"
+    zh: "1号泵站"
+  default_language: ru
+  # Порядок узлов на мнемосхеме — по ходу технологического потока.
+  flow: [intake, tank, pump, discharge]
+  groups:
+    intake:    { ru: "Подача", en: "Intake", zh: "进水" }
+    tank:      { ru: "Резервуар", en: "Tank", zh: "储罐" }
+    pump:      { ru: "Насосный агрегат", en: "Pump unit", zh: "泵机组" }
+    discharge: { ru: "Нагнетание", en: "Discharge", zh: "出水" }
+
 devices:
   - id: plc_main
-    name: "Основной ПЛК"
+    name:
+      ru: "Основной ПЛК"
+      en: "Main PLC"
+      zh: "主控PLC"
     enabled: true
     host: localhost
     port: 5020
     slave_id: 1
-    # Раньше здесь не было ни одного тега — DataPoller._poll_device()
-    # успешно подключался к устройству, но тут же возвращал None
-    # (tags = config.get('tags', []) — пусто, поэтому нечего было
-    # читать), то есть система молча ничего не делала "из коробки".
-    # Адреса ниже соответствуют тому, что реально отдаёт
-    # modbus_emulator_new.py: регистр 0 — имитация температуры
-    # (50-249), регистр 1 — имитация давления (0-199).
+    poll_interval_ms: 1000
     tags:
-      - name: temperature
-        function: holding_register
-        address: 0
-        count: 1
-        scale: 1.0
-        alarm_high: 200
-        alarm_low: 40
-      - name: pressure
-        function: holding_register
+      - name: inflow
+        label: { ru: "Подача насоса", en: "Pump inflow", zh: "泵进水流量" }
         address: 1
-        count: 1
-        scale: 1.0
-        alarm_high: 180
+        scale: 0.1
+        unit: "m³/h"
+        min: 0
+        max: 100
+        group: intake
+
+      - name: tank_level
+        label: { ru: "Уровень в резервуаре", en: "Tank level", zh: "储罐液位" }
+        address: 0
+        type: int16
+        scale: 0.1
+        unit: "%"
+        min: 0
+        max: 100
+        alarm_hh: 95
+        alarm_high: 85
+        alarm_low: 20
+        alarm_ll: 10
+        deadband: 1.0
+        on_delay_s: 2
+        group: tank
+        widget: tank
+
+      - name: level_setpoint
+        label: { ru: "Уставка уровня", en: "Level setpoint", zh: "液位设定值" }
+        address: 10
+        scale: 0.1
+        unit: "%"
+        min: 20
+        max: 85
+        writable: true
+        ml: false
+        group: tank
+
+      - name: pump_running
+        label: { ru: "Насос в работе", en: "Pump running", zh: "泵运行" }
+        function: coil
+        address: 0
+        writable: true
+        ml: false
+        group: pump
+
+      - name: pump_speed
+        label: { ru: "Обороты насоса", en: "Pump speed", zh: "泵转速" }
+        address: 3
+        unit: "rpm"
+        min: 0
+        max: 1500
+        group: pump
+        widget: pump
+
+      - name: motor_current
+        label: { ru: "Ток двигателя", en: "Motor current", zh: "电机电流" }
+        address: 4
+        scale: 0.1
+        unit: "A"
+        min: 0
+        max: 40
+        alarm_high: 32
+        deadband: 0.5
+        group: pump
+
+      - name: vibration
+        label: { ru: "Вибрация подшипника", en: "Bearing vibration", zh: "轴承振动" }
+        address: 7
+        scale: 0.01
+        unit: "mm/s"
+        min: 0
+        max: 8
+        alarm_high: 4.5
+        alarm_hh: 7.1
+        deadband: 0.2
+        on_delay_s: 3
+        group: pump
+        widget: gauge
+
+      - name: bearing_temp
+        label: { ru: "Температура подшипника", en: "Bearing temperature", zh: "轴承温度" }
+        address: 5
+        scale: 0.1
+        unit: "°C"
+        min: 0
+        max: 120
+        alarm_high: 80
+        alarm_hh: 95
+        deadband: 1.0
+        group: pump
+        widget: thermometer
+
+      - name: discharge_pressure
+        label: { ru: "Давление нагнетания", en: "Discharge pressure", zh: "出口压力" }
+        address: 6
+        scale: 0.01
+        unit: "bar"
+        min: 0
+        max: 8
+        alarm_high: 5.0
+        alarm_low: 1.2
+        deadband: 0.1
+        on_delay_s: 2
+        group: discharge
+        widget: gauge
+
+      - name: outflow
+        label: { ru: "Расход потребителю", en: "Outflow to consumer", zh: "出水流量" }
+        address: 2
+        scale: 0.1
+        unit: "m³/h"
+        min: 0
+        max: 100
+        group: discharge
+
+      - name: outlet_valve
+        label: { ru: "Задвижка на выходе", en: "Outlet valve", zh: "出口阀门" }
+        function: coil
+        address: 1
+        writable: true
+        ml: false
+        group: discharge
+        widget: valve
+
+ml:
+  enabled: true
+  warmup: 30              # отсчётов на тег до первых решений
+  z_threshold: 4.0        # порог выброса, σ
+  train_samples: 300      # отсчётов для обучения многомерной модели
+  forecast_horizon_s: 900 # предаларм, если порог будет пересечён в пределах 15 мин
+
+alarms:
+  standing_after_s: 600   # «висящий» аларм (ISA-18.2)
+  chatter_count: 3        # столько срабатываний...
+  chatter_window_s: 60    # ...за это время = «дребезг»
+  flood_per_10min: 10     # порог лавины алармов (EEMUA 191)
+
+storage:
+  history_size: 3600      # отсчётов на тег в оперативной памяти
+  postgres:
+    enabled: true         # в режиме --demo игнорируется
+
+server:
+  host: 127.0.0.1
+  port: 8000
