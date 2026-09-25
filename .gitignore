@@ -10,7 +10,11 @@ secrets/
 *.db
 *.sqlite3
 *.sql
+!scada_core/database/migrations/*.sql
 pgdata/
+
+# Обученные ML-модели конкретной установки (создаются автоматически)
+models/
 
 # Логи
 *.log
@@ -43,9 +47,11 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
-# Распределенные файлы
+# Распределенные файлы и сборка C++ ядра
 dist/
 build/
+scada_core/ml/_native*.so
+scada_core/ml/_native*.pyd
 *.egg-info/
 *.egg
 
