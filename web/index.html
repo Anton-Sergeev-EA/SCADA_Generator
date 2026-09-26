@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SCADA Generator</title>
+  <meta name="description" content="Self-generating, self-learning SCADA: Modbus TCP, ISA-18.2 alarms, streaming ML in C++">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 2 29 9.5v13L16 30 3 22.5v-13z' fill='%23a879ff'/%3E%3Cpath d='M9 18h4l2-6 3 10 2-4h3' stroke='%23fff' stroke-width='2.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/assets/css/app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" aria-label="navigation">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <path d="M16 2 29 9.5v13L16 30 3 22.5v-13z" class="brand-hex"/>
+          <path d="M9 18h4l2-6 3 10 2-4h3" class="brand-pulse"/>
+        </svg>
+        <div class="brand-text">
+          <strong>SCADA Generator</strong>
+          <span data-i18n="app.tagline"></span>
+        </div>
+      </div>
+      <nav class="nav">
+        <a href="#overview" data-view="overview"><svg viewBox="0 0 24 24"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg><span data-i18n="nav.overview"></span></a>
+        <a href="#trends" data-view="trends"><svg viewBox="0 0 24 24"><path d="M3 20h18M5 16l4-5 4 3 6-8"/></svg><span data-i18n="nav.trends"></span></a>
+        <a href="#alarms" data-view="alarms"><svg viewBox="0 0 24 24"><path d="M12 3 2 20h20zM12 10v4m0 3v.5"/></svg><span data-i18n="nav.alarms"></span><b class="nav-badge" id="nav-alarms" hidden></b></a>
+        <a href="#insights" data-view="insights"><svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0-4 10.5V17h8v-3.5A6 6 0 0 0 12 3zM9 21h6"/></svg><span data-i18n="nav.insights"></span><b class="nav-badge ml" id="nav-insights" hidden></b></a>
+        <a href="#generator" data-view="generator"><svg viewBox="0 0 24 24"><path d="M4 5h7v6H4zM13 13h7v6h-7zM11 8h4v5M7 11v4h6"/></svg><span data-i18n="nav.generator"></span></a>
+        <a href="#demo" data-view="demo" id="nav-demo" hidden><svg viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg><span data-i18n="nav.demo"></span></a>
+      </nav>
+      <div class="sidebar-foot">
+        <span class="chip" id="core-chip"></span>
+        <span class="chip" id="db-chip"></span>
+        <span class="version" id="version"></span>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menu-btn" aria-label="menu"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+        <div class="plant">
+          <h1 id="plant-name">—</h1>
+          <span class="demo-flag" id="demo-flag" hidden data-i18n="top.demo"></span>
+        </div>
+        <div class="top-health" title="">
+          <svg viewBox="0 0 36 36" class="ring" aria-hidden="true">
+            <circle cx="18" cy="18" r="15.5" class="ring-bg"/>
+            <circle cx="18" cy="18" r="15.5" class="ring-fg" id="health-ring"/>
+          </svg>
+          <div><b id="health-value">—</b><span data-i18n="top.health"></span></div>
+        </div>
+        <div class="conn" id="conn"><i></i><span data-i18n="top.connecting"></span></div>
+        <div class="clock" id="clock"></div>
+        <div class="lang" role="group" aria-label="language">
+          <button data-lang="ru">RU</button><button data-lang="en">EN</button><button data-lang="zh">中文</button>
+        </div>
+        <button class="icon-btn" id="theme-btn" aria-label="theme"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"/></svg></button>
+      </header>
+
+      <main class="views">
+        <!-- ======== Мнемосхема ======== -->
+        <section class="view" id="view-overview">
+          <div class="kpis">
+            <div class="kpi"><span data-i18n="kpi.health"></span><b id="kpi-health">—</b></div>
+            <div class="kpi"><span data-i18n="kpi.alarms"></span><b id="kpi-alarms">0</b></div>
+            <div class="kpi"><span data-i18n="kpi.unacked"></span><b id="kpi-unacked">0</b></div>
+            <div class="kpi ml"><span data-i18n="kpi.predicted"></span><b id="kpi-predicted">0</b></div>
+            <div class="kpi ml"><span data-i18n="kpi.insights"></span><b id="kpi-insights">0</b></div>
+            <div class="kpi"><span data-i18n="kpi.eemua"></span><b id="kpi-eemua">—</b></div>
+          </div>
+          <div class="card mimic-card">
+            <div class="card-head">
+              <h2 data-i18n="overview.mimic"></h2>
+              <span class="muted" id="mimic-sub"></span>
+            </div>
+            <div class="mimic-wrap"><svg id="mimic" class="mimic" role="img"></svg></div>
+            <div class="legend">
+              <span data-i18n="overview.legend"></span>
+              <span><i class="sw high"></i><span data-i18n="legend.high"></span></span>
+              <span><i class="sw medium"></i><span data-i18n="legend.medium"></span></span>
+              <span><i class="sw low"></i><span data-i18n="legend.low"></span></span>
+              <span><i class="sw ml"></i><span data-i18n="legend.ml"></span></span>
+              <span><i class="sw comm"></i><span data-i18n="legend.comm"></span></span>
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="card">
+              <div class="card-head"><h2 data-i18n="overview.latest_insights"></h2><a href="#insights" data-i18n="overview.all"></a></div>
+              <ul class="insight-list" id="ov-insights"></ul>
+            </div>
+            <div class="card">
+              <div class="card-head"><h2 data-i18n="overview.latest_alarms"></h2><a href="#alarms" data-i18n="overview.all"></a></div>
+              <ul class="alarm-list" id="ov-alarms"></ul>
+            </div>
+          </div>
+        </section>
+
+        <!-- ======== Тренды ======== -->
+        <section class="view" id="view-trends" hidden>
+          <div class="card">
+            <div class="toolbar">
+              <span class="muted" data-i18n="trends.pick"></span>
+              <div class="chips" id="trend-picker"></div>
+              <div class="seg" id="trend-range">
+                <button data-range="300">5 min</button><button data-range="900">15 min</button><button data-range="3600">1 h</button>
+              </div>
+            </div>
+            <div class="trend-legend">
+              <span><i class="ln value"></i><span data-i18n="tag.value"></span></span>
+              <span><i class="ln band"></i><span data-i18n="trends.band"></span></span>
+              <span><i class="ln forecast"></i><span data-i18n="trends.forecast"></span></span>
+              <span><i class="dot ml"></i><span data-i18n="trends.anomaly"></span></span>
+            </div>
+          </div>
+          <div class="trend-grid" id="trend-grid"></div>
+        </section>
+
+        <!-- ======== Алармы ======== -->
+        <section class="view" id="view-alarms" hidden>
+          <div class="grid-main-side">
+            <div class="card">
+              <div class="card-head">
+                <h2 data-i18n="alarms.title"></h2>
+                <button class="btn" id="ack-all" data-i18n="alarms.ack_all"></button>
+              </div>
+              <div class="table-wrap">
+                <table class="table" id="alarm-table">
+                  <thead><tr>
+                    <th data-i18n="alarms.col.priority"></th><th data-i18n="alarms.col.time"></th>
+                    <th data-i18n="alarms.col.message"></th><th data-i18n="alarms.col.state"></th><th></th>
+                  </tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <h3 class="sub" data-i18n="alarms.journal"></h3>
+              <ul class="journal" id="journal"></ul>
+            </div>
+            <div class="card" id="kpi-panel">
+              <div class="card-head"><h2 data-i18n="alarms.kpi"></h2></div>
+              <div class="eemua" id="eemua"></div>
+              <dl class="kv" id="kpi-list"></dl>
+            </div>
+          </div>
+        </section>
+
+        <!-- ======== ИИ-аналитика ======== -->
+        <section class="view" id="view-insights" hidden>
+          <div class="grid-main-side">
+            <div class="card">
+              <div class="card-head"><h2 data-i18n="overview.latest_insights"></h2></div>
+              <ul class="insight-list big" id="insights-active"></ul>
+              <h3 class="sub" data-i18n="ml.history"></h3>
+              <ul class="insight-list compact" id="insights-history"></ul>
+            </div>
+            <div class="side-stack">
+              <div class="card">
+                <div class="card-head"><h2 data-i18n="ml.model"></h2><button class="btn ghost" id="retrain" data-i18n="ml.retrain"></button></div>
+                <p class="muted small" data-i18n="ml.model_desc"></p>
+                <div id="mspc-status"></div>
+                <div class="meters">
+                  <div class="meter"><span data-i18n="ml.spe"></span><div class="bar"><i id="spe-bar"></i></div><b id="spe-val">—</b></div>
+                  <div class="meter"><span data-i18n="ml.t2"></span><div class="bar"><i id="t2-bar"></i></div><b id="t2-val">—</b></div>
+                </div>
+                <h3 class="sub" data-i18n="ml.contrib"></h3>
+                <div class="contrib" id="contrib"></div>
+              </div>
+              <div class="card">
+                <div class="card-head"><h2 data-i18n="ml.how"></h2></div>
+                <ol class="how">
+                  <li data-i18n="ml.how.1"></li><li data-i18n="ml.how.2"></li><li data-i18n="ml.how.3"></li>
+                </ol>
+                <dl class="kv" id="ml-kv"></dl>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ======== Генератор ======== -->
+        <section class="view" id="view-generator" hidden>
+          <div class="card">
+            <div class="card-head"><h2 data-i18n="gen.title"></h2></div>
+            <p class="muted" data-i18n="gen.desc"></p>
+            <div class="gen">
+              <div class="gen-editor">
+                <div class="toolbar">
+                  <button class="btn" id="gen-current" data-i18n="gen.load_current"></button>
+                  <button class="btn" id="gen-example" data-i18n="gen.example"></button>
+                  <button class="btn primary" id="gen-run" data-i18n="gen.generate"></button>
+                </div>
+                <textarea id="gen-yaml" spellcheck="false" autocomplete="off" wrap="off"></textarea>
+              </div>
+              <div class="gen-preview">
+                <div class="toolbar">
+                  <b data-i18n="gen.preview"></b>
+                  <span class="spacer"></span>
+                  <button class="btn ghost" id="gen-svg" data-i18n="gen.download_svg" disabled></button>
+                  <button class="btn ghost" id="gen-json" data-i18n="gen.download_json" disabled></button>
+                </div>
+                <div class="gen-result" id="gen-result"></div>
+                <div class="mimic-wrap"><svg id="gen-mimic" class="mimic"></svg></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ======== Демо ======== -->
+        <section class="view" id="view-demo" hidden>
+          <div class="card">
+            <div class="card-head"><h2 data-i18n="demo.title"></h2><button class="btn" id="demo-clear" data-i18n="demo.clear_all"></button></div>
+            <p class="muted" data-i18n="demo.desc"></p>
+            <div class="scenarios" id="scenarios"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Карточка тега -->
+  <aside class="drawer" id="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <div><h2 id="dr-title"></h2><span class="muted mono" id="dr-key"></span></div>
+      <button class="icon-btn" id="dr-close" aria-label="close"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="dr-value"><b id="dr-value">—</b><span id="dr-unit"></span></div>
+    <div id="dr-status"></div>
+    <canvas class="dr-chart" id="dr-chart"></canvas>
+    <dl class="kv" id="dr-kv"></dl>
+    <div id="dr-control"></div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+  <div class="toast" id="toast" role="status"></div>
+
+  <script type="module" src="/assets/js/app.js"></script>
+</body>
+</html>
