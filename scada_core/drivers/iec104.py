@@ -6,8 +6,9 @@
 Тег: ioa: 1001, type: float (M_ME_NC_1) | scaled (M_ME_NB_1) | bool (M_SP_NA_1)
      command_ioa: 5001 — адрес команды для записи (уставка C_SE_NC_1/C_SE_NB_1
      или команда C_SC_NA_1); по умолчанию запись запрещена.
-При подключении выполняется общий опрос (general interrogation), дальше
-значения приходят спорадически.
+После каждого подключения драйвер сам проводит инициализацию: STARTDT, общий
+опрос (general interrogation) и синхронизацию часов. Команды отправляются только
+после успешного общего опроса, дальше значения приходят спорадически.
 """
 
 from __future__ import annotations
@@ -47,6 +48,8 @@ class Iec104Driver(Driver):
         self._points: dict[str, Any] = {}
         self._created: dict[str, Any] = {}  # processed_at точки при создании
         self._commands: dict[str, Any] = {}
+        self._ready_at: float | None = None  # connected_at соединения, для которого прошла инициализация
+        self._init_lock = asyncio.Lock()
 
     def _types(self, tag: TagConfig) -> tuple[Any, Any]:
         t = self._c104.Type
@@ -59,7 +62,7 @@ class Iec104Driver(Driver):
     def _start(self) -> None:
         c104 = self._c104
         client = c104.Client(tick_rate_ms=100, command_timeout_ms=int(self.device.timeout * 1000))
-        conn = client.add_connection(ip=self.device.host, port=self.device.port, init=c104.Init.ALL)
+        conn = client.add_connection(ip=self.device.host, port=self.device.port, init=c104.Init.MUTED)
         station = conn.add_station(common_address=int(self.device.options.get("common_address", 1)))
         for tag in self.device.tags:
             mtype, ctype = self._types(tag)
@@ -85,24 +88,60 @@ class Iec104Driver(Driver):
         if self._conn.is_connected:
             await self._ensure_active()
         self._connected = bool(self._conn.is_connected)
-        self.last_error = None if self._connected else f"no link to {self.describe()}"
+        if not self._connected:
+            self.last_error = f"no link to {self.describe()}"
+        elif self._is_ready():
+            self.last_error = None
         return self._connected
 
-    async def _ensure_active(self) -> None:
-        """Соединение может остаться «немым» (OPEN_MUTED): TCP открыт, но
-        STARTDT не подтверждён и данные не идут — например, после
-        перезапуска КП. Снимаем немоту и повторяем общий опрос."""
+    @property
+    def _ca(self) -> int:
+        return int(self.device.options.get("common_address", 1))
+
+    def _is_ready(self) -> bool:
         conn = self._conn
-        if conn is None or not conn.is_muted:
+        return (
+            conn is not None
+            and conn.is_connected
+            and not conn.is_muted
+            and self._ready_at is not None
+            and self._ready_at == conn.connected_at
+        )
+
+    async def _ensure_active(self) -> None:
+        """Инициализация станции после подключения или переподключения.
+
+        Соединение открывается «немым» (OPEN_MUTED): TCP открыт, данные не идут.
+        Снимаем немоту (STARTDT), ждём подтверждения и делаем общий опрос. Кадры,
+        отправленные до подтверждения STARTDT, станция может не обработать, поэтому
+        общий опрос (его безопасно повторять) повторяется до успеха, а команды
+        отправляются только после него. То же после перезапуска КП или сети."""
+        if self._is_ready():
             return
-        ca = int(self.device.options.get("common_address", 1))
-        loop = asyncio.get_running_loop()
-        try:
-            await loop.run_in_executor(None, conn.unmute)
-            await loop.run_in_executor(None, lambda: conn.interrogation(common_address=ca))
-            logger.info("IEC 104 %s: STARTDT + general interrogation", self.describe())
-        except Exception as exc:  # noqa: BLE001
-            self.last_error = error_text(exc)
+        async with self._init_lock:
+            conn = self._conn
+            if conn is None or not conn.is_connected or self._is_ready():
+                return
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + self.device.timeout
+            try:
+                if conn.is_muted:
+                    await loop.run_in_executor(None, conn.unmute)
+                while conn.is_muted and loop.time() < deadline:
+                    await asyncio.sleep(0.05)
+                for _ in range(3):
+                    ok = await loop.run_in_executor(None, lambda: conn.interrogation(common_address=self._ca))
+                    if ok:
+                        break
+                else:
+                    self.last_error = "общий опрос не подтверждён станцией"
+                    return
+                # Часы: не все КП принимают синхронизацию — это не ошибка связи.
+                await loop.run_in_executor(None, lambda: conn.clock_sync(common_address=self._ca))
+                self._ready_at = conn.connected_at
+                logger.info("IEC 104 %s: STARTDT + general interrogation", self.describe())
+            except Exception as exc:  # noqa: BLE001
+                self.last_error = error_text(exc)
 
     async def read(self) -> dict[str, tuple[float | None, str]]:
         if self._conn is None or not self._conn.is_connected:
@@ -125,6 +164,11 @@ class Iec104Driver(Driver):
         point = self._commands.get(tag.name)
         if point is None:
             raise PermissionError("для записи в МЭК 104 задайте command_ioa у тега")
+        if self._conn is None or not self._conn.is_connected:
+            raise DriverError(self.last_error or f"no link to {self.describe()}")
+        await self._ensure_active()
+        if not self._is_ready():
+            raise DriverError(self.last_error or "станция не инициализирована")
         c104 = self._c104
         raw = to_raw(tag, value)
         if tag.is_bit:
@@ -144,4 +188,5 @@ class Iec104Driver(Driver):
             client, self._client = self._client, None
             await asyncio.get_running_loop().run_in_executor(None, client.stop)
         self._conn = None
+        self._ready_at = None
         self._connected = False

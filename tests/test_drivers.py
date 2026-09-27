@@ -261,33 +261,17 @@ async def _published(broker, topic):
 
 # ---------------------------------------------------------------- МЭК 60870-5-104
 async def test_iec104(port: int) -> None:
-    c104 = pytest.importorskip("c104")
+    pytest.importorskip("c104")
+    from scada_core.sim.iec104_station import StationProcess
 
-    def make_server():
-        srv = c104.Server(ip="127.0.0.1", port=port)
-        st = srv.add_station(common_address=5)
-        pts = {
-            "level": st.add_point(io_address=1001, type=c104.Type.M_ME_NC_1),
-            "breaker": st.add_point(io_address=2001, type=c104.Type.M_SP_NA_1),
-            "count": st.add_point(io_address=3001, type=c104.Type.M_ME_NB_1),
-        }
-        pts["level"].value = 12.5
-        pts["breaker"].value = True
-        pts["count"].value = c104.Int16(42)
-        received: list[float] = []
-        cmd = st.add_point(io_address=5001, type=c104.Type.C_SE_NC_1)
-
-        def on_cmd(
-            point: c104.Point, previous_info: c104.Information, message: c104.IncomingMessage
-        ) -> c104.ResponseState:
-            received.append(point.value)
-            return c104.ResponseState.SUCCESS
-
-        cmd.on_receive(callable=on_cmd)
-        srv.start()
-        return srv, pts, received
-
-    srv, pts, received = make_server()
+    # Станция — отдельный процесс, как настоящий КП.
+    station = StationProcess(
+        port,
+        ca=5,
+        points=["1001:float:12.5", "2001:bool:1", "3001:int16:42"],
+        commands=["5001:float"],
+    )
+    await station.start()
     dev = device(
         "iec104",
         [
@@ -309,16 +293,23 @@ async def test_iec104(port: int) -> None:
         assert values["breaker"] == (1.0, QUALITY_GOOD)
         assert values["count"] == (21.0, QUALITY_GOOD)
         assert values["unknown"] == (None, QUALITY_BAD)
-        pts["level"].value = 20.25
-        pts["level"].transmit(cause=c104.Cot.SPONTANEOUS)
+        await station.set(1001, 20.25)  # спорадическая передача
         await eventually(lambda: _iec_value(drv, "level", 20.25))
-        await drv.write(dev.tags[0], 77.5)
-        assert received == [77.5]
+        await drv.write(dev.tags[0], 77.5)  # True только после подтверждения станцией
+
+        async def command_logged():  # станция сообщает о командах через свой stdout
+            return station.commands
+
+        assert await eventually(command_logged) == [(5001, 77.5)]
 
         # «Немое» соединение (TCP открыт, STARTDT снят) драйвер восстанавливает сам.
         await asyncio.get_running_loop().run_in_executor(None, drv._conn.mute)
-        assert drv._conn.is_muted
-        pts["level"].value = 30.5  # пока соединение «немое», это значение не дойдёт
+
+        async def muted():  # признак выставляется после подтверждения STOPDT станцией
+            return drv._conn.is_muted
+
+        await eventually(muted)
+        await station.set(1001, 30.5, transmit=False)  # дойдёт только через общий опрос
 
         async def recovered():
             values = await drv.read()  # драйвер снимает немоту и делает общий опрос
@@ -328,10 +319,11 @@ async def test_iec104(port: int) -> None:
         with pytest.raises(PermissionError):
             await drv.write(dev.tags[1], 1)  # нет command_ioa — запись запрещена
 
-        srv.stop()
+        await station.stop()
         await eventually(lambda: _mqtt_quality(drv, "level", QUALITY_COMM))
     finally:
         await drv.disconnect()
+        await station.stop()
 
 
 async def _iec_value(drv, name, value):
