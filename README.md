@@ -195,6 +195,10 @@ devices:
 ошибки устройства, потеря связи и восстановление. В карточке тега видно, откуда
 пришло значение (например «OPC UA · ns=2;s=Pump2.Current»).
 
+Для пусконаладки без оборудования есть эмулятор КП МЭК 104:
+`python -m scada_core.sim.iec104_station --port 2404 --ca 1 --point 1001:float:10.5 --command 5001:float`
+(значения меняются командой `set 1001 11.2` в консоли, принятые команды печатаются).
+
 ## Docker
 
 ```bash
@@ -308,7 +312,7 @@ SCADA_generator/
 │   ├── hmi/generator.py       генератор мнемосхемы
 │   ├── database/              репозиторий PostgreSQL + миграции
 │   ├── drivers/               драйверы протоколов: Modbus TCP/RTU, OPC UA, MQTT, МЭК 104
-│   ├── sim/                   модель станции, Modbus TCP/RTU сервер, тестовый MQTT-брокер
+│   ├── sim/                   модель станции, Modbus TCP/RTU сервер, MQTT-брокер, КП МЭК 104
 │   ├── commissioning.py       проверка связи перед пуском (--check)
 │   ├── api/server.py          REST + WebSocket
 │   └── runtime.py             сборка системы

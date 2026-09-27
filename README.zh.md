@@ -90,7 +90,9 @@ SCADA Generator 不绑定任何厂商。设备通过开放标准接入，同一�
 驱动为可选项：只安装需要的（`pip install asyncua`，或 `pip install -r requirements-protocols.txt`
 全部安装）。缺少库的设备显示为离线并给出原因，其余设备照常工作。五种协议的完整示例见
 `configs/examples/multi_protocol.yaml`。每个驱动都针对真实服务器或仿真器测试：读、写、设备错误、
-断线与恢复。
+断线与恢复。无设备调试时可使用 IEC 104 子站仿真器：
+`python -m scada_core.sim.iec104_station --port 2404 --ca 1 --point 1001:float:10.5 --command 5001:float`
+（输入 `set 1001 11.2` 修改数值，收到的命令会打印出来）。
 
 ## Docker
 

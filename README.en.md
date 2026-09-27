@@ -128,7 +128,10 @@ Drivers are optional: install only what you need (`pip install asyncua`, or ever
 with `pip install -r requirements-protocols.txt`). A device whose library is missing is
 shown offline with a clear reason; the others keep working. A full five-protocol
 example is in `configs/examples/multi_protocol.yaml`. Every driver is tested against a
-real server or emulator: reads, writes, device errors, link loss and recovery.
+real server or emulator: reads, writes, device errors, link loss and recovery. For
+commissioning without hardware there is an IEC 104 station emulator:
+`python -m scada_core.sim.iec104_station --port 2404 --ca 1 --point 1001:float:10.5 --command 5001:float`
+(type `set 1001 11.2` to change a value; received commands are printed).
 
 ## Docker
 
