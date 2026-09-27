@@ -1,0 +1,53 @@
+# Полный стенд: эмулятор ПЛК (Modbus TCP) + PostgreSQL + SCADA Generator.
+#
+#   SCADA_API_TOKEN=... DB_PASSWORD=... docker compose up --build
+#   открыть http://127.0.0.1:8000
+#
+# Для реального объекта уберите сервис plc-sim и задайте PLC_HOST.
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: scada_generator
+      POSTGRES_USER: scada
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-scada_dev_password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scada -d scada_generator"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  plc-sim:
+    build: .
+    entrypoint: ["python", "modbus_emulator_new.py", "--port", "5020"]
+    healthcheck:
+      disable: true
+
+  scada:
+    build: .
+    command: []  # без --demo: опрос устройства, архив, интерфейс
+    depends_on:
+      db:
+        condition: service_healthy
+      plc-sim:
+        condition: service_started
+    environment:
+      PLC_HOST: ${PLC_HOST:-plc-sim}
+      PLC_PORT: ${PLC_PORT:-5020}
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: scada_generator
+      DB_USER: scada
+      DB_PASSWORD: ${DB_PASSWORD:-scada_dev_password}
+      SCADA_API_TOKEN: ${SCADA_API_TOKEN:-}
+    volumes:
+      - models:/app/models
+    ports:
+      - "127.0.0.1:8000:8000"
+
+volumes:
+  pgdata:
+  models:
