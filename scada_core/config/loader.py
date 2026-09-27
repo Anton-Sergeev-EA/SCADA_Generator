@@ -17,7 +17,26 @@ load_dotenv()
 
 LANGUAGES = ("ru", "en", "zh")
 FUNCTIONS = ("holding_register", "input_register", "coil", "discrete_input")
-TYPES = {"uint16": 1, "int16": 1, "uint32": 2, "int32": 2, "float32": 2}
+# Число регистров Modbus на тип; для остальных протоколов тип — это формат
+# значения (bool — дискретный сигнал).
+TYPES = {"uint16": 1, "int16": 1, "uint32": 2, "int32": 2, "float32": 2, "bool": 1, "float": 2}
+PROTOCOLS = ("modbus_tcp", "modbus_rtu", "opcua", "mqtt", "iec104")
+# Чем адресуется тег в каждом протоколе.
+TAG_ADDRESS = {
+    "modbus_tcp": "address",
+    "modbus_rtu": "address",
+    "opcua": "node",
+    "mqtt": "topic",
+    "iec104": "ioa",
+}
+# Параметры устройства, специфичные для протокола (хранятся в options).
+DEVICE_OPTIONS = {
+    "modbus_rtu": ("serial_port", "baudrate", "parity", "stopbits", "bytesize"),
+    "opcua": ("endpoint", "username", "password", "security"),
+    "mqtt": ("username", "password", "tls", "client_id", "stale_s"),
+    "iec104": ("common_address",),
+}
+DEFAULT_PORTS = {"modbus_tcp": 502, "mqtt": 1883, "iec104": 2404}
 WIDGETS = ("tank", "pump", "valve", "gauge", "thermometer", "flow", "value", "indicator")
 DEFAULT_CONFIG_PATH = Path(os.getenv("SCADA_CONFIG", "configs/config.yaml"))
 
@@ -44,7 +63,13 @@ def make_label(value: Any, fallback: str) -> Label:
 @dataclass
 class TagConfig:
     name: str
-    address: int
+    address: int | None = None  # Modbus: номер регистра/бита
+    node: str | None = None  # OPC UA: NodeId, например ns=2;s=Tank.Level
+    topic: str | None = None  # MQTT: топик со значением
+    json_path: str | None = None  # MQTT: путь в JSON-сообщении, например data.value
+    command_topic: str | None = None  # MQTT: куда публиковать команды записи
+    ioa: int | None = None  # МЭК 104: адрес объекта информации
+    command_ioa: int | None = None  # МЭК 104: адрес объекта команды
     function: str = "holding_register"
     type: str = "uint16"
     scale: float = 1.0
@@ -67,7 +92,19 @@ class TagConfig:
 
     @property
     def is_bit(self) -> bool:
-        return self.function in ("coil", "discrete_input")
+        return self.function in ("coil", "discrete_input") or self.type == "bool"
+
+    @property
+    def source(self) -> str:
+        """Адрес тега в терминах его протокола — для оператора и журнала."""
+        if self.node:
+            return self.node
+        if self.topic:
+            return self.topic + (f" → {self.json_path}" if self.json_path else "")
+        if self.ioa is not None:
+            return f"IOA {self.ioa}"
+        short = {"holding_register": "HR", "input_register": "IR", "coil": "CO", "discrete_input": "DI"}
+        return f"{short.get(self.function, self.function)} {self.address}"
 
     @property
     def register_count(self) -> int:
@@ -86,9 +123,11 @@ class TagConfig:
 @dataclass
 class DeviceConfig:
     id: str
-    host: str
+    host: str = "localhost"
     port: int = 502
     slave_id: int = 1
+    protocol: str = "modbus_tcp"
+    options: dict[str, Any] = field(default_factory=dict)
     name: Label = field(default_factory=dict)
     enabled: bool = True
     timeout: float = 3.0
@@ -183,11 +222,7 @@ def _parse_tag(raw: Any, path: str, errors: list) -> TagConfig | None:
         errors.append((f"{path}.name", "обязательное поле"))
         return None
     address = _num(raw, "address", path, errors, integer=True)
-    if address is None:
-        if "address" not in raw:
-            errors.append((f"{path}.address", "обязательное поле"))
-        return None
-    if not 0 <= address <= 65535:
+    if address is not None and not 0 <= address <= 65535:
         errors.append((f"{path}.address", "адрес Modbus должен быть в диапазоне 0..65535"))
     function = raw.get("function", "holding_register")
     if function not in FUNCTIONS:
@@ -205,6 +240,12 @@ def _parse_tag(raw: Any, path: str, errors: list) -> TagConfig | None:
     tag = TagConfig(
         name=name,
         address=address,
+        node=str(raw["node"]) if raw.get("node") else None,
+        topic=str(raw["topic"]) if raw.get("topic") else None,
+        json_path=str(raw["json_path"]) if raw.get("json_path") else None,
+        command_topic=str(raw["command_topic"]) if raw.get("command_topic") else None,
+        ioa=_num(raw, "ioa", path, errors, integer=True),
+        command_ioa=_num(raw, "command_ioa", path, errors, integer=True),
         function=function,
         type=dtype,
         scale=_num(raw, "scale", path, errors) or 1.0,
@@ -220,7 +261,7 @@ def _parse_tag(raw: Any, path: str, errors: list) -> TagConfig | None:
         deadband=abs(_num(raw, "deadband", path, errors) or 0.0),
         on_delay_s=max(0.0, _num(raw, "on_delay_s", path, errors) or 0.0),
         writable=bool(raw.get("writable", False)),
-        ml=bool(raw.get("ml", function in ("holding_register", "input_register"))),
+        ml=bool(raw.get("ml", function in ("holding_register", "input_register") and dtype != "bool")),
         widget=widget,
         group=str(raw["group"]) if raw.get("group") else None,
         decimals=_num(raw, "decimals", path, errors, integer=True),
@@ -263,19 +304,36 @@ def parse_config(data: Any) -> AppConfig:
         seen_ids.add(dev_id)
         tags: list[TagConfig] = []
         names: set[str] = set()
+        protocol = str(rd.get("protocol", "modbus_tcp"))
+        if protocol not in PROTOCOLS:
+            errors.append((f"{path}.protocol", f"допустимо: {', '.join(PROTOCOLS)}"))
+            protocol = "modbus_tcp"
+        key = TAG_ADDRESS[protocol]
         for j, rt in enumerate(rd.get("tags") or []):
-            tag = _parse_tag(rt, f"{path}.tags[{j}]", errors)
+            tpath = f"{path}.tags[{j}]"
+            tag = _parse_tag(rt, tpath, errors)
             if tag is None:
                 continue
+            if getattr(tag, key) is None:
+                errors.append((f"{tpath}.{key}", f"обязательное поле для протокола {protocol}"))
             if tag.name in names:
                 errors.append((f"{path}.tags[{j}].name", f"повторяющееся имя {tag.name!r}"))
             names.add(tag.name)
             tags.append(tag)
+        options = {k: rd[k] for k in DEVICE_OPTIONS.get(protocol, ()) if rd.get(k) is not None}
+        if protocol == "modbus_rtu" and not options.get("serial_port"):
+            errors.append(
+                (f"{path}.serial_port", "обязательное поле: /dev/ttyUSB0, COM3 или socket://шлюз:порт")
+            )
+        if protocol == "opcua" and not options.get("endpoint"):
+            errors.append((f"{path}.endpoint", "обязательное поле: opc.tcp://хост:4840"))
         devices.append(
             DeviceConfig(
                 id=str(dev_id),
+                protocol=protocol,
+                options=options,
                 host=str(rd.get("host", "localhost")),
-                port=_num(rd, "port", path, errors, integer=True) or 502,
+                port=_num(rd, "port", path, errors, integer=True) or DEFAULT_PORTS.get(protocol, 502),
                 slave_id=_num(rd, "slave_id", path, errors, integer=True) or 1,
                 name=make_label(rd.get("name"), str(dev_id)),
                 enabled=bool(rd.get("enabled", True)),

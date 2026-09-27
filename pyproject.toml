@@ -1,11 +1,18 @@
 [project]
 name = "scada-generator"
-version = "1.0.0"
-description = "Self-generating, self-learning SCADA: Modbus TCP, ISA-18.2 alarms, streaming ML in C++"
+version = "1.1.0"
+description = "Self-generating, self-learning SCADA: Modbus TCP/RTU, OPC UA, MQTT, IEC 60870-5-104, ISA-18.2 alarms, streaming ML in C++"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE.md" }
 authors = [{ name = "Anton Sergeev", email = "kavery@mail.ru" }]
+
+[project.optional-dependencies]
+modbus-rtu = ["pyserial>=3.5"]
+opcua = ["asyncua>=1.1"]
+mqtt = ["aiomqtt>=2.0"]
+iec104 = ["c104>=2.0"]  # GPL-3.0
+all-protocols = ["pyserial>=3.5", "asyncua>=1.1", "aiomqtt>=2.0", "c104>=2.0"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

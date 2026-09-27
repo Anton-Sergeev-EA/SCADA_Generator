@@ -78,6 +78,8 @@ def _widget(dev: DeviceConfig, tag: TagConfig, kind: str) -> dict[str, Any]:
         "bit": tag.is_bit,
         "decimals": infer_decimals(tag),
         "ml": tag.ml and not tag.is_bit,
+        "protocol": dev.protocol,
+        "source": tag.source,
     }
 
 

@@ -45,7 +45,10 @@ def create_app(runtime: ScadaRuntime) -> FastAPI:
     app = FastAPI(
         title="SCADA Generator API",
         version=runtime.meta()["version"],
-        description="Self-generating, self-learning SCADA: Modbus TCP, ISA-18.2 alarms, ML.",
+        description=(
+            "Self-generating, self-learning SCADA: Modbus TCP/RTU, OPC UA, MQTT, IEC 104; "
+            "ISA-18.2 alarms; ML."
+        ),
     )
     token = os.getenv("SCADA_API_TOKEN", "")
 

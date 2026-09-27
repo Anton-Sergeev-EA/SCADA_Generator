@@ -2,7 +2,8 @@
 Modbus device polling scheduler.
 
 Каждое устройство опрашивается собственной задачей со своим периодом
-(poll_interval_ms), теги читаются блоками. Поллер только собирает
+(poll_interval_ms) через драйвер своего протокола (scada_core/drivers):
+Modbus TCP/RTU, OPC UA, MQTT, МЭК 104. Поллер только собирает
 данные; алармы и аналитика обрабатываются подписчиками (см. runtime.py).
 """
 
@@ -17,15 +18,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from scada_core.config.loader import AppConfig, DeviceConfig, TagConfig, load_app_config
-from scada_core.engine.codec import decode, plan_blocks
-from scada_core.engine.modbus_client import AsyncModbusManager
+from scada_core.config.loader import AppConfig, DeviceConfig, load_app_config
+from scada_core.drivers import (
+    QUALITY_BAD,
+    QUALITY_COMM,
+    QUALITY_GOOD,
+    QUALITY_STALE,
+    Driver,
+    DriverUnavailable,
+    create_driver,
+)
 
 logger = logging.getLogger(__name__)
 
-QUALITY_GOOD = "GOOD"
-QUALITY_BAD = "BAD"
-QUALITY_COMM = "COMM_FAIL"
+__all__ = ["QUALITY_BAD", "QUALITY_COMM", "QUALITY_GOOD", "QUALITY_STALE", "DataPoller", "TagValue"]
 
 
 @dataclass
@@ -57,15 +63,16 @@ async def _maybe_await(result: Any) -> None:
 
 
 class DataPoller:
-    """Modbus device polling scheduler."""
+    """Опрос устройств любых поддерживаемых протоколов."""
 
     def __init__(self, config: AppConfig | None = None) -> None:
         self._config = config or load_app_config()
-        self._devices: dict[str, AsyncModbusManager] = {}
+        self._drivers: dict[str, Driver] = {}
         self._tasks: list[asyncio.Task] = []
         self._data_callbacks: list[DataCallback] = []
         self._status_callbacks: list[StatusCallback] = []
         self._online: dict[str, bool] = {}
+        self._errors: dict[str, str] = {}
         self._is_running = False
         self.cycles = 0
 
@@ -78,11 +85,14 @@ class DataPoller:
         else:
             raise ValueError(f"unknown callback type: {callback_type!r}")
 
-    def client(self, device_id: str) -> AsyncModbusManager | None:
-        return self._devices.get(device_id)
+    def driver(self, device_id: str) -> Driver | None:
+        return self._drivers.get(device_id)
 
     def device_online(self, device_id: str) -> bool:
         return self._online.get(device_id, False)
+
+    def device_error(self, device_id: str) -> str | None:
+        return self._errors.get(device_id)
 
     @property
     def is_running(self) -> bool:
@@ -97,16 +107,20 @@ class DataPoller:
             return
         self._is_running = True
         for dev in devices:
-            client = AsyncModbusManager(
-                host=dev.host,
-                port=dev.port,
-                slave_id=dev.slave_id,
-                timeout=dev.timeout,
-                max_retries=dev.retries,
+            try:
+                driver = create_driver(dev)
+            except DriverUnavailable as exc:
+                # Устройство без установленной библиотеки не должно ронять
+                # всю систему: остальные устройства продолжают работать.
+                logger.error("%s: %s", dev.id, exc)
+                self._errors[dev.id] = str(exc)
+                self._tasks.append(asyncio.create_task(self._unavailable_loop(dev, str(exc))))
+                continue
+            self._drivers[dev.id] = driver
+            self._tasks.append(asyncio.create_task(self._device_loop(dev, driver)))
+            logger.info(
+                "Device added: %s [%s %s]", dev.name.get("ru", dev.id), dev.protocol, driver.describe()
             )
-            self._devices[dev.id] = client
-            self._tasks.append(asyncio.create_task(self._device_loop(dev, client)))
-            logger.info("Device added: %s (%s:%s)", dev.name.get("ru", dev.id), dev.host, dev.port)
         logger.info("DataPoller started")
 
     async def stop(self) -> None:
@@ -117,11 +131,16 @@ class DataPoller:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
-        for client in self._devices.values():
-            await client.disconnect()
+        for driver in self._drivers.values():
+            try:
+                await driver.disconnect()
+            except Exception:
+                logger.exception("disconnect failed")
         logger.info("DataPoller stopped")
 
     async def _set_online(self, device_id: str, online: bool, error: str | None) -> None:
+        if error:
+            self._errors[device_id] = error
         if self._online.get(device_id) == online:
             return
         self._online[device_id] = online
@@ -131,19 +150,27 @@ class DataPoller:
             except Exception:
                 logger.exception("status callback failed")
 
-    async def _device_loop(self, dev: DeviceConfig, client: AsyncModbusManager) -> None:
+    async def _emit(self, values: list[TagValue]) -> None:
+        self.cycles += 1
+        for cb in self._data_callbacks:
+            try:
+                await _maybe_await(cb(values))
+            except Exception:
+                logger.exception("data callback failed")
+
+    async def _unavailable_loop(self, dev: DeviceConfig, error: str) -> None:
         period = dev.poll_interval_ms / 1000.0
-        blocks = plan_blocks(list(dev.tags))
+        while self._is_running:
+            await self._set_online(dev.id, False, error)
+            await self._emit([TagValue(dev.id, t.name, None, QUALITY_COMM) for t in dev.tags])
+            await asyncio.sleep(period)
+
+    async def _device_loop(self, dev: DeviceConfig, driver: Driver) -> None:
+        period = dev.poll_interval_ms / 1000.0
         next_t = time.monotonic()
         while self._is_running:
             try:
-                values = await self.poll_device(dev, client, blocks)
-                self.cycles += 1
-                for cb in self._data_callbacks:
-                    try:
-                        await _maybe_await(cb(values))
-                    except Exception:
-                        logger.exception("data callback failed")
+                await self._emit(await self.poll_device(dev, driver))
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -155,34 +182,14 @@ class DataPoller:
                 delay = 0
             await asyncio.sleep(delay)
 
-    async def poll_device(
-        self, dev: DeviceConfig, client: AsyncModbusManager, blocks: list[dict] | None = None
-    ) -> list[TagValue]:
+    async def poll_device(self, dev: DeviceConfig, driver: Driver) -> list[TagValue]:
         """Один цикл опроса устройства. Возвращает значения всех тегов;
         при отсутствии связи — с качеством COMM_FAIL, чтобы оператор
         видел потерю связи, а не «замёрзшие» цифры."""
-        blocks = blocks if blocks is not None else plan_blocks(list(dev.tags))
         ts = time.time()
-        if not await client.connect():
-            await self._set_online(dev.id, False, client.last_error)
+        if not await driver.connect():
+            await self._set_online(dev.id, False, driver.last_error)
             return [TagValue(dev.id, t.name, None, QUALITY_COMM, ts) for t in dev.tags]
-
-        values: list[TagValue] = []
-        for block in blocks:
-            count = block["end"] - block["start"]
-            raw = await client.read(block["function"], block["start"], count)
-            tag: TagConfig
-            for tag in block["tags"]:
-                if raw is None:
-                    quality = QUALITY_BAD if client.is_connected else QUALITY_COMM
-                    values.append(TagValue(dev.id, tag.name, None, quality, ts))
-                    continue
-                off = tag.address - block["start"]
-                try:
-                    value = decode(tag, raw[off : off + tag.register_count])
-                    values.append(TagValue(dev.id, tag.name, value, QUALITY_GOOD, ts))
-                except (IndexError, ValueError) as exc:
-                    logger.error("Decode error %s/%s: %s", dev.id, tag.name, exc)
-                    values.append(TagValue(dev.id, tag.name, None, QUALITY_BAD, ts))
-        await self._set_online(dev.id, client.is_connected, client.last_error)
-        return values
+        values = await driver.read()
+        await self._set_online(dev.id, driver.is_connected, driver.last_error)
+        return [TagValue(dev.id, t.name, *values.get(t.name, (None, QUALITY_BAD)), ts) for t in dev.tags]

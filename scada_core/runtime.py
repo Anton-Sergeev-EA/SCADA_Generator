@@ -14,8 +14,9 @@ from typing import Any
 
 from scada_core import __version__
 from scada_core.config.loader import AppConfig, TagConfig
+from scada_core.drivers import DriverError, available_protocols
 from scada_core.engine.alarms import AlarmEngine, AlarmEvent
-from scada_core.engine.codec import decode, encode
+from scada_core.engine.codec import decode
 from scada_core.engine.data_poller import QUALITY_GOOD, DataPoller, TagValue
 from scada_core.hmi.generator import generate_hmi
 from scada_core.ml.engine import Insight, MLEngine
@@ -348,6 +349,10 @@ class ScadaRuntime:
             "database": bool(self.repo),
             "started_at": self.started_at,
             "faults": list(self._fault_catalog()) if self.demo else [],
+            "devices": [
+                {"id": d.id, "name": d.name, "protocol": d.protocol} for d in self.config.active_devices
+            ],
+            "protocols": available_protocols(),
         }
 
     def _fault_catalog(self) -> list[str]:
@@ -365,22 +370,13 @@ class ScadaRuntime:
         if not tag.is_bit:
             if (tag.min is not None and value < tag.min) or (tag.max is not None and value > tag.max):
                 raise ValueError(f"value out of range [{tag.min}, {tag.max}]")
-        client = self.poller.client(device_id)
-        if client is None:
+        driver = self.poller.driver(device_id)
+        if driver is None:
             raise RuntimeError("device is not polled")
-        words = encode(tag, value)
-        if tag.function == "coil":
-            ok = await client.write_single_coil(tag.address, bool(words[0]))
-        elif tag.function == "holding_register":
-            ok = (
-                await client.write_single_register(tag.address, words[0])
-                if len(words) == 1
-                else await client.write_multiple_registers(tag.address, words)
-            )
-        else:
-            raise PermissionError("function is read-only by protocol")
-        if not ok:
-            raise RuntimeError(client.last_error or "write failed")
+        try:
+            await driver.write(tag, value)
+        except DriverError as exc:
+            raise RuntimeError(str(exc)) from exc
         # Смена уставки/режима оператором — штатное событие: новая норма.
         self.ml.rebase(device_id)
         self.alarms.journal.append(

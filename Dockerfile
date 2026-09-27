@@ -24,8 +24,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 WORKDIR /app
 RUN useradd --system --uid 10001 --home-dir /app scada
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY requirements.txt requirements-protocols.txt ./
+# PROTOCOLS=all — все драйверы (OPC UA, MQTT, RTU, МЭК 104); PROTOCOLS=base — только Modbus TCP.
+ARG PROTOCOLS=all
+RUN pip install -r requirements.txt \
+    && if [ "$PROTOCOLS" = "all" ]; then pip install -r requirements-protocols.txt; fi
 COPY run.py modbus_emulator_new.py ./
 COPY configs configs
 COPY web web
