@@ -62,3 +62,7 @@ scada_core/ml/_native*.pyd
 
 # Файлы проекта
 config.json
+# Отчёты покрытия тестами
+.coverage
+.coverage.*
+htmlcov/

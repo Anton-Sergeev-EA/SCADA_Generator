@@ -14,6 +14,10 @@ import pytest
 
 asyncpg = pytest.importorskip("asyncpg")
 DSN = os.getenv("SCADA_TEST_PG")
+if not DSN and os.getenv("SCADA_REQUIRE_PG"):
+    # В CI тесты БД обязательны: потерянная переменная не должна
+    # превращаться в тихий пропуск и зелёную сборку.
+    raise RuntimeError("SCADA_REQUIRE_PG=1, но SCADA_TEST_PG не задан")
 pytestmark = pytest.mark.skipif(not DSN, reason="SCADA_TEST_PG не задан")
 
 from scada_core.database.repository import DatabaseRepository  # noqa: E402
