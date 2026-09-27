@@ -129,7 +129,8 @@ class ModbusRtuDriver(_ModbusDriver):
         self._gap = max(3.5 * char_s, 0.00175)
 
     def describe(self) -> str:
-        return f"{self.url} {self.params['baudrate']} {self.params['bytesize']}{self.params['parity']}"
+        p = self.params
+        return f"{self.url} {p['baudrate']} {p['bytesize']}{p['parity']}{p['stopbits']:g}"
 
     async def _run(self, func: Any, *args: Any) -> Any:
         return await asyncio.get_running_loop().run_in_executor(None, func, *args)

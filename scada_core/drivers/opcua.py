@@ -22,6 +22,7 @@ from scada_core.drivers.base import (
     Driver,
     DriverError,
     DriverUnavailable,
+    error_text,
     to_engineering,
     to_raw,
 )
@@ -66,7 +67,7 @@ class OpcUaDriver(Driver):
             self.last_error = None
             logger.info("OPC UA connected: %s", self.endpoint)
         except Exception as exc:  # noqa: BLE001 - сеть, сертификаты, авторизация
-            self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_error = error_text(exc)
             self._connected = False
             await self._safe_disconnect(client)
         return self._connected
@@ -79,7 +80,7 @@ class OpcUaDriver(Driver):
             # Одно обращение на все теги устройства.
             values = await self._client.read_attributes(self._nodes)
         except Exception as exc:  # noqa: BLE001 - потеря сессии
-            self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_error = error_text(exc)
             await self._drop()
             return {t.name: (None, QUALITY_COMM) for t in tags}
         out: dict[str, tuple[float | None, str]] = {}
@@ -110,7 +111,7 @@ class OpcUaDriver(Driver):
                 raw = round(raw)
             await node.write_value(ua.DataValue(ua.Variant(raw, vtype)))
         except Exception as exc:
-            raise DriverError(f"{type(exc).__name__}: {exc}") from exc
+            raise DriverError(error_text(exc)) from exc
 
     async def _drop(self) -> None:
         client, self._client = self._client, None

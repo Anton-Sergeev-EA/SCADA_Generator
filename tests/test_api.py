@@ -131,6 +131,7 @@ async def test_health_endpoints(client) -> None:
         await asyncio.sleep(0.05)
     r = await client.get("/api/health")
     assert r.status_code == 503 and r.json()["devices"] == {"plc_main": False}
+    assert r.json()["device_errors"]["plc_main"]  # причина видна мониторингу
 
 
 async def test_ml_and_shelve_endpoints(client) -> None:

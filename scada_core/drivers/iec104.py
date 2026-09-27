@@ -24,6 +24,7 @@ from scada_core.drivers.base import (
     Driver,
     DriverError,
     DriverUnavailable,
+    error_text,
     to_engineering,
     to_raw,
 )
@@ -75,7 +76,7 @@ class Iec104Driver(Driver):
             try:
                 await asyncio.get_running_loop().run_in_executor(None, self._start)
             except Exception as exc:  # noqa: BLE001
-                self.last_error = f"{type(exc).__name__}: {exc}"
+                self.last_error = error_text(exc)
                 return False
         for _ in range(int(self.device.timeout * 10)):
             if self._conn.is_connected:
@@ -101,7 +102,7 @@ class Iec104Driver(Driver):
             await loop.run_in_executor(None, lambda: conn.interrogation(common_address=ca))
             logger.info("IEC 104 %s: STARTDT + general interrogation", self.describe())
         except Exception as exc:  # noqa: BLE001
-            self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_error = error_text(exc)
 
     async def read(self) -> dict[str, tuple[float | None, str]]:
         if self._conn is None or not self._conn.is_connected:

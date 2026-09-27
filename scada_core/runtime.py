@@ -334,6 +334,7 @@ class ScadaRuntime:
             "status": "ok" if ready else "degraded",
             "poller": self.poller.is_running,
             "devices": devices,
+            "device_errors": {d: self.poller.device_error(d) for d, online in devices.items() if not online},
             "database": db_ok,
             "db_queue": self._db_events.qsize() if self._db_events else 0,
             "uptime_s": round(time.time() - self.started_at, 1),

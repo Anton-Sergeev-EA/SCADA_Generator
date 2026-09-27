@@ -78,6 +78,12 @@ def parse_payload(payload: bytes | str, json_path: str | None) -> Any:
     return node
 
 
+def error_text(exc: BaseException) -> str:
+    """Текст ошибки для оператора: у TimeoutError и подобных str(exc) пустой."""
+    text = str(exc)
+    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
 class Driver(ABC):
     """Драйвер одного устройства. Реализации: scada_core/drivers/*.py."""
 

@@ -23,6 +23,7 @@ from scada_core.drivers.base import (
     DriverError,
     DriverUnavailable,
     PushCache,
+    error_text,
     parse_payload,
     to_engineering,
     to_raw,
@@ -96,7 +97,7 @@ class MqttDriver(Driver):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - брокер недоступен, обрыв сети
-                self.last_error = f"{type(exc).__name__}: {exc}"
+                self.last_error = error_text(exc)
             self._client = None
             self._connected = False
             self._ready.set()
@@ -126,7 +127,7 @@ class MqttDriver(Driver):
         try:
             await self._client.publish(tag.command_topic or f"{tag.topic}/set", payload, qos=1)
         except Exception as exc:
-            raise DriverError(f"{type(exc).__name__}: {exc}") from exc
+            raise DriverError(error_text(exc)) from exc
 
     async def disconnect(self) -> None:
         if self._task is not None:
