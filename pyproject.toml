@@ -1,0 +1,26 @@
+[project]
+name = "scada-generator"
+version = "1.0.0"
+description = "Self-generating, self-learning SCADA: Modbus TCP, ISA-18.2 alarms, streaming ML in C++"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE.md" }
+authors = [{ name = "Anton Sergeev", email = "kavery@mail.ru" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = ["ignore::DeprecationWarning:websockets.*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+extend-exclude = ["build", "native"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "BLE", "RUF"]
+ignore = ["RUF001", "RUF002", "RUF003"]  # кириллица в строках и комментариях — норма для проекта
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B", "RUF"]

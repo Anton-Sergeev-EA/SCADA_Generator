@@ -1,46 +1,26 @@
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import asyncio
-import logging
+"""Проверка Modbus-клиента против эмулятора (раньше — ручной скрипт).
+
+Эмулятор поднимается внутри теста, поэтому отдельно запускать
+modbus_emulator_new.py не нужно.
+"""
+
 from scada_core.engine.modbus_client import AsyncModbusManager
+from scada_core.sim import Simulator
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
-async def test():
-    """Test Modbus client functionality."""
-    # Порт был 502 (стандартный Modbus-порт), но эмулятор
-    # (modbus_emulator_new.py) по умолчанию слушает 5020 — с портом 502
-    # этот скрипт никогда не смог бы подключиться к эмулятору.
-    client = AsyncModbusManager("localhost", 5020, 1)
-    
-    if await client.connect():
-        logger.info("Connected to emulator.")
-        
-        # Read registers.
-        regs = await client.read_holding_registers(0, 5)
-        if regs:
-            logger.info(f"Holding Registers (0-4): {regs}")
-        
-        # Read coils.
-        coils = await client.read_coils(0, 5)
-        if coils:
-            logger.info(f"Coils (0-4): {coils}")
-        
-        # Write value.
-        success = await client.write_single_register(0, 999)
-        if success:
-            logger.info("Register 0 written = 999")
-            # Verify write.
-            reg = await client.read_holding_registers(0, 1)
-            if reg:
-                logger.info(f"Write verification: register 0 = {reg[0]}")
-        
+async def test_client_against_emulator(port: int) -> None:
+    sim = Simulator(port=port)
+    await sim.start()
+    client = AsyncModbusManager("127.0.0.1", port, 1, timeout=1.0, max_retries=1)
+    try:
+        assert await client.connect()
+        regs = await client.read_holding_registers(0, 8)
+        assert regs is not None and len(regs) == 8
+        assert 500 <= regs[0] <= 700  # уровень 50..70 % (×10)
+        coils = await client.read_coils(0, 2)
+        assert coils == [True, True]  # насос в работе, задвижка открыта
+        assert await client.write_single_register(10, 550)  # уставка 55 %
+        assert (await client.read_holding_registers(10, 1)) == [550]
+    finally:
         await client.disconnect()
-    else:
-        logger.error("Failed to connect.")
-
-if __name__ == "__main__":
-    asyncio.run(test())
-
+        await sim.stop()

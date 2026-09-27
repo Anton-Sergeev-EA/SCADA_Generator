@@ -1,73 +1,57 @@
-#!/usr/bin/env python3
-"""
-DataPoller test with database storage
-"""
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+"""DataPoller против эмулятора: значения, качество, потеря связи."""
+
 import asyncio
-import logging
-from scada_core.engine.data_poller import DataPoller
-from scada_core.database.repository import get_repository
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from scada_core.config.loader import AppConfig
+from scada_core.engine.data_poller import QUALITY_COMM, QUALITY_GOOD, DataPoller, TagValue
+from scada_core.sim import Simulator
 
-repo = get_repository()
 
-async def data_callback(results):
-    """Save data to database"""
-    try:
-        for tag_value in results:
-            await repo.save_tag_value(
-                tag_value.device_id,
-                tag_value.tag_name,
-                tag_value.value,
-                tag_value.quality
-            )
-            logger.info(f"{tag_value.device_id}/{tag_value.tag_name}: {tag_value.value}")
-    except Exception as e:
-        logger.error(f"Data save error: {e}")
+async def wait_for(predicate, timeout: float = 8.0) -> None:
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while not predicate():
+        if loop.time() > end:
+            raise AssertionError("timeout")
+        await asyncio.sleep(0.05)
 
-async def alarm_callback(tag_name, value, alarm_type, message):
-    """Save alarm to database"""
-    try:
-        await repo.save_alarm("plc_main", tag_name, alarm_type, value, message)
-        logger.warning(f"{alarm_type}: {tag_name} = {value} - {message}")
-    except Exception as e:
-        logger.error(f"Alarm save error: {e}")
 
-async def main():
-    """Main entry point"""
-    # Initialize database.
-    try:
-        await repo.initialize()
-        logger.info("PostgreSQL ready")
-    except Exception as e:
-        logger.error(f"PostgreSQL error: {e}")
-        return
-    
-    # Create Poller instance.
-    poller = DataPoller()
-    poller.add_callback("data", data_callback)
-    poller.add_callback("alarm", alarm_callback)
-    
-    # Start polling.
+async def test_poller_reads_all_tags_and_reports_comm_loss(config: AppConfig) -> None:
+    sim = Simulator(port=config.devices[0].port)
+    await sim.start()
+    batches: list[list[TagValue]] = []
+    status: list[tuple[str, bool]] = []
+    poller = DataPoller(config)
+    poller.add_callback("data", batches.append)
+    poller.add_callback("status", lambda dev, online, err: status.append((dev, online)))
     await poller.start()
-    logger.info("DataPoller started. Press Ctrl+C to stop")
-    
     try:
-        await asyncio.sleep(30)  # Run for 30 seconds.
-    except KeyboardInterrupt:
-        pass
+        await wait_for(lambda: len(batches) >= 2)
+        last = {tv.tag_name: tv for tv in batches[-1]}
+        assert set(last) == {t.name for t in config.devices[0].tags}
+        assert all(tv.quality == QUALITY_GOOD for tv in last.values())
+        assert 0 <= last["tank_level"].value <= 100
+        assert last["pump_running"].value == 1.0
+        assert status == [("plc_main", True)]
+
+        await sim.stop()  # «обрыв кабеля»
+        await wait_for(lambda: batches[-1][0].quality == QUALITY_COMM)
+        assert ("plc_main", False) in status
     finally:
         await poller.stop()
-        await repo.close()
-        logger.info("System stopped")
 
-if __name__ == "__main__":
-    asyncio.run(main())
 
+async def test_poller_period_is_respected(config: AppConfig) -> None:
+    sim = Simulator(port=config.devices[0].port)
+    await sim.start()
+    poller = DataPoller(config)
+    stamps: list[float] = []
+    poller.add_callback("data", lambda values: stamps.append(values[0].ts))
+    await poller.start()
+    try:
+        await wait_for(lambda: len(stamps) >= 6)
+    finally:
+        await poller.stop()
+        await sim.stop()
+    gaps = [b - a for a, b in zip(stamps, stamps[1:])]
+    assert all(0.1 < g < 0.5 for g in gaps), gaps  # poll_interval_ms = 200
