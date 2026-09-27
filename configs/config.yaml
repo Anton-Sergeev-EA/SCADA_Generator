@@ -13,6 +13,9 @@
 #              (если не задан — выбирается автоматически)
 #   group      узел мнемосхемы; writable — разрешена запись оператором
 #   label      строка или словарь {ru, en, zh}
+#
+# Значения можно брать из окружения: ${PLC_HOST:-localhost} — переменная
+# PLC_HOST, а если она не задана — localhost.
 
 project:
   name:
@@ -35,8 +38,8 @@ devices:
       en: "Main PLC"
       zh: "主控PLC"
     enabled: true
-    host: localhost
-    port: 5020
+    host: ${PLC_HOST:-localhost}
+    port: ${PLC_PORT:-5020}
     slave_id: 1
     poll_interval_ms: 1000
     tags:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -328,7 +329,32 @@ def parse_config(data: Any) -> AppConfig:
     )
 
 
-def parse_config_text(text: str) -> AppConfig:
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}")
+
+
+def expand_env(text: str, *, use_environment: bool = True) -> str:
+    """Подставляет ${VAR} и ${VAR:-по_умолчанию} из окружения — один и тот
+    же config.yaml работает на стенде, в Docker и на объекте.
+
+    use_environment=False — только значения по умолчанию. Так разбирается
+    YAML, присланный через интерфейс: иначе ${DB_PASSWORD} в подписи тега
+    показал бы секрет сервера на мнемосхеме."""
+
+    def repl(m: re.Match[str]) -> str:
+        if not use_environment:
+            return m.group(2) if m.group(2) is not None else m.group(0)
+        value = os.getenv(m.group(1))
+        if value is None:
+            if m.group(2) is None:
+                raise ConfigError([(f"${{{m.group(1)}}}", "переменная окружения не задана")])
+            return m.group(2)
+        return value
+
+    return _ENV_REF.sub(repl, text)
+
+
+def parse_config_text(text: str, *, use_environment: bool = True) -> AppConfig:
+    text = expand_env(text, use_environment=use_environment)
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
@@ -370,7 +396,7 @@ class ConfigLoader:
     def load(self) -> dict[str, Any]:
         if not self.config_path.exists():
             raise FileNotFoundError(f"Конфиг не найден: {self.config_path}")
-        text = self.config_path.read_text(encoding="utf-8")
+        text = expand_env(self.config_path.read_text(encoding="utf-8"))
         self._config = yaml.safe_load(text)
         self.app = parse_config(self._config)
         logger.info("Конфигурация загружена из %s", self.config_path)

@@ -69,3 +69,16 @@ def test_yaml_syntax_error_has_line() -> None:
 
 def test_empty_devices() -> None:
     assert errors_of("project: {name: x}") == ["devices"]
+
+
+def test_environment_substitution(monkeypatch) -> None:
+    text = "devices: [{id: d, host: '${PLC_HOST:-localhost}', port: ${PLC_PORT:-502}, tags: []}]"
+    monkeypatch.delenv("PLC_HOST", raising=False)
+    monkeypatch.delenv("PLC_PORT", raising=False)
+    dev = parse_config_text(text).devices[0]
+    assert (dev.host, dev.port) == ("localhost", 502)
+    monkeypatch.setenv("PLC_HOST", "10.0.0.7")
+    monkeypatch.setenv("PLC_PORT", "1502")
+    dev = parse_config_text(text).devices[0]
+    assert (dev.host, dev.port) == ("10.0.0.7", 1502)
+    assert errors_of("devices: [{id: d, host: '${NO_SUCH_VAR_X}', tags: []}]") == ["${NO_SUCH_VAR_X}"]
