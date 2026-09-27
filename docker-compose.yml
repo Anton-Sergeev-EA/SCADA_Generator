@@ -28,7 +28,9 @@ services:
 
   scada:
     build: .
-    command: []  # без --demo: опрос устройства, архив, интерфейс
+    # Рабочий режим (опрос устройства + архив + интерфейс). Команда должна
+    # быть непустой: пустой command Docker заменяет командой образа (--demo).
+    command: ["--log-level", "INFO"]
     depends_on:
       db:
         condition: service_healthy
