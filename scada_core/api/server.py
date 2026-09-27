@@ -56,6 +56,17 @@ def create_app(runtime: ScadaRuntime) -> FastAPI:
 
     control = [Depends(require_token)]
 
+    @app.get("/api/health/live", include_in_schema=False)
+    def live() -> dict[str, str]:
+        """Liveness: процесс жив и отвечает (для Docker HEALTHCHECK)."""
+        return {"status": "ok"}
+
+    @app.get("/api/health")
+    def health() -> JSONResponse:
+        """Readiness: 200 — всё в порядке, 503 — нет связи с устройством или БД."""
+        body = runtime.readiness()
+        return JSONResponse(status_code=200 if body["status"] == "ok" else 503, content=body)
+
     @app.get("/api/meta")
     def meta() -> dict[str, Any]:
         m = runtime.meta()
@@ -70,7 +81,8 @@ def create_app(runtime: ScadaRuntime) -> FastAPI:
     def hmi_preview(req: YamlRequest) -> JSONResponse:
         """«Генератор»: YAML -> мнемосхема, без применения к работающей системе."""
         try:
-            cfg = parse_config_text(req.yaml)
+            # Окружение сервера не подставляем: YAML пришёл от пользователя.
+            cfg = parse_config_text(req.yaml, use_environment=False)
         except ConfigError as exc:
             errors = [{"path": p, "message": m} for p, m in exc.errors]
             return JSONResponse(status_code=422, content={"errors": errors})

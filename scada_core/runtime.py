@@ -45,6 +45,10 @@ class ScadaRuntime:
         self.repo: Any = None
         self._use_db = (not demo and config.storage.postgres_enabled) if use_db is None else use_db
         self._subscribers: set[asyncio.Queue] = set()
+        # События для архива пишутся строго по очереди одной задачей: иначе
+        # UPDATE «возврат аларма» мог выполниться раньше INSERT «аларм».
+        self._db_events: asyncio.Queue | None = None
+        self._db_worker: asyncio.Task | None = None
         self._tags = {(d.id, t.name): t for d, t in config.iter_tags()}
 
         self.poller.add_callback("data", self._on_data)
@@ -71,7 +75,7 @@ class ScadaRuntime:
                     [(d.id, t.name, {"unit": t.unit, "label": t.label}) for d, t in self.config.iter_tags()]
                 )
                 repo.start_background_flush()
-                self.repo = repo
+                self.attach_repository(repo)
             except Exception as exc:  # noqa: BLE001
                 logger.error("PostgreSQL недоступен, работаем без архива: %s", exc)
         await self.poller.start()
@@ -80,8 +84,41 @@ class ScadaRuntime:
         await self.poller.stop()
         if self.simulator:
             await self.simulator.stop()
+        if self._db_events is not None and self._db_worker is not None:
+            try:  # дописываем то, что уже в очереди, но не ждём вечно
+                await asyncio.wait_for(self._db_events.join(), timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("Не все события успели записаться в архив")
+            self._db_worker.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._db_worker
         if self.repo:
             await self.repo.close()
+
+    def attach_repository(self, repo: Any) -> None:
+        """Подключает архив и запускает единственного «писателя» событий."""
+        self.repo = repo
+        self._db_events = asyncio.Queue(maxsize=10_000)
+        self._db_worker = asyncio.create_task(self._db_loop())
+
+    async def _db_loop(self) -> None:
+        assert self._db_events is not None
+        while True:
+            make_coro = await self._db_events.get()
+            try:
+                await make_coro()
+            except Exception as exc:  # noqa: BLE001 - БД могла стать недоступной
+                logger.warning("Запись события в архив не удалась: %s", exc)
+            finally:
+                self._db_events.task_done()
+
+    def _to_db(self, make_coro: Any) -> None:
+        if self._db_events is None:
+            return
+        try:
+            self._db_events.put_nowait(make_coro)
+        except asyncio.QueueFull:
+            logger.warning("Очередь архива переполнена — событие пропущено")
 
     def pretrain(self, seconds: int) -> None:
         """Демо: «прокручиваем» модель процесса вперёд, чтобы ML-модели были
@@ -205,7 +242,8 @@ class ScadaRuntime:
         payload = event.to_dict()
         self.broadcast({"type": "alarm", "data": payload})
         if self.repo:
-            self._background(self.repo.save_alarm_event(event.event, payload["alarm"], event.ts))
+            repo = self.repo
+            self._to_db(lambda: repo.save_alarm_event(event.event, payload["alarm"], event.ts))
 
     def _on_insight(self, event: str, insight: Insight) -> None:
         if event == "update":
@@ -213,11 +251,8 @@ class ScadaRuntime:
         data = insight.to_dict()
         self.broadcast({"type": "insight", "event": event, "data": data})
         if self.repo:
-            self._background(self.repo.save_insight(event, data))
-
-    def _background(self, coro: Any) -> None:
-        task = asyncio.get_running_loop().create_task(coro)
-        task.add_done_callback(lambda t: t.exception() and logger.warning("DB: %s", t.exception()))
+            repo = self.repo
+            self._to_db(lambda: repo.save_insight(event, data))
 
     # ---------- подписчики ----------
     def subscribe(self) -> asyncio.Queue:
@@ -287,6 +322,20 @@ class ScadaRuntime:
             "insights": [i.to_dict() for i in self.ml.active_insights()],
             "devices": {d.id: self.poller.device_online(d.id) for d in self.config.active_devices},
             "mspc": {k: m.last_mspc for k, m in self.ml.devices.items()},
+        }
+
+    def readiness(self) -> dict[str, Any]:
+        """Готовность для мониторинга/оркестратора (см. /api/health)."""
+        devices = {d.id: self.poller.device_online(d.id) for d in self.config.active_devices}
+        db_ok = None if not self._use_db else bool(self.repo and self.repo.connected)
+        ready = self.poller.is_running and all(devices.values()) and db_ok is not False
+        return {
+            "status": "ok" if ready else "degraded",
+            "poller": self.poller.is_running,
+            "devices": devices,
+            "database": db_ok,
+            "db_queue": self._db_events.qsize() if self._db_events else 0,
+            "uptime_s": round(time.time() - self.started_at, 1),
         }
 
     def meta(self) -> dict[str, Any]:

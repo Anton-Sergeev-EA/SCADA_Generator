@@ -115,3 +115,78 @@ async def test_i18n_dictionaries_are_complete(client) -> None:
             )
     index = await client.get("/")
     assert index.status_code == 200 and "SCADA Generator" in index.text
+
+
+async def test_health_endpoints(client) -> None:
+    assert (await client.get("/api/health/live")).json() == {"status": "ok"}
+    r = await client.get("/api/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "ok" and body["devices"] == {"plc_main": True}
+    assert body["database"] is None  # в демо архив не настроен — это не ошибка
+    await client.runtime.simulator.stop()  # «обрыв связи» с ПЛК
+    for _ in range(100):
+        if not client.runtime.poller.device_online("plc_main"):
+            break
+        await asyncio.sleep(0.05)
+    r = await client.get("/api/health")
+    assert r.status_code == 503 and r.json()["devices"] == {"plc_main": False}
+
+
+async def test_ml_and_shelve_endpoints(client) -> None:
+    assert (await client.post("/api/ml/rebase/plc_main?tag=tank_level")).json() == {"ok": True}
+    assert (await client.post("/api/ml/rebase/nope")).json() == {"ok": False}
+    assert (await client.post("/api/ml/retrain")).json() == {"retraining": ["plc_main"]}
+    status = (await client.get("/api/ml/status")).json()
+    assert status["devices"]["plc_main"]["pca"]["trained"] is False
+    rt = client.runtime
+    rt.alarms.set_condition("plc_main", "tank_level", "H", True, value=90, limit=85)
+    alarm = rt.alarms.visible_alarms()[0]
+    assert (await client.post(f"/api/alarms/{alarm.id}/shelve", json={"seconds": 60})).json()["ok"]
+    assert (await client.get("/api/alarms/kpi")).json()["shelved"] == 1
+    assert (await client.post("/api/alarms/1/shelve", json={"seconds": 1})).status_code == 422
+
+
+def test_websocket_sends_snapshot_first(config) -> None:
+    from fastapi.testclient import TestClient
+
+    rt = ScadaRuntime(config, demo=False, use_db=False, model_dir=None)
+    with TestClient(create_app(rt)) as tc, tc.websocket_connect("/ws") as ws:
+        msg = ws.receive_json()
+        assert msg["type"] == "snapshot"
+        assert "plc_main/tank_level" in msg["data"]["tags"]
+
+
+async def test_archive_events_are_written_in_order(config) -> None:
+    """Регрессия: raise/clear писались параллельными задачами, и UPDATE
+    «возврат» мог выполниться раньше INSERT «аларм»."""
+    log: list[str] = []
+
+    class SlowRepo:
+        connected = True
+
+        async def save_alarm_event(self, event, alarm, ts):
+            log.append(f"start:{event}")
+            await asyncio.sleep(0.05 if event == "raise" else 0)
+            log.append(f"end:{event}")
+
+        async def save_insight(self, event, data):
+            pass
+
+        async def close(self):
+            pass
+
+    rt = ScadaRuntime(config, demo=False, use_db=False, model_dir=None)
+    rt.attach_repository(SlowRepo())
+    rt.alarms.set_condition("plc_main", "tank_level", "H", True, ts=1)
+    rt.alarms.set_condition("plc_main", "tank_level", "H", False, ts=2)
+    await rt.stop()
+    assert log == ["start:raise", "end:raise", "start:clear", "end:clear"]
+
+
+async def test_preview_does_not_leak_server_environment(client, monkeypatch) -> None:
+    monkeypatch.setenv("DB_PASSWORD", "top-secret")
+    yaml_text = "devices: [{id: a, host: h, tags: [{name: x, address: 0, label: '${DB_PASSWORD}'}]}]"
+    r = await client.post("/api/hmi/preview", json={"yaml": yaml_text})
+    assert r.status_code == 200
+    assert "top-secret" not in r.text
