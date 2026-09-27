@@ -19,8 +19,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install ruff
@@ -34,8 +34,8 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install pybind11 cmake ninja
@@ -68,8 +68,8 @@ jobs:
       # Тесты БД обязательны: без SCADA_TEST_PG они упадут, а не пропустятся.
       SCADA_REQUIRE_PG: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -94,18 +94,20 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build image and start the full stack (PLC emulator + PostgreSQL + SCADA)
         run: docker compose up -d --build
       - name: Wait until the stack is ready
         run: |
+          code=000
           for i in $(seq 1 60); do
-            if curl -sf localhost:8000/api/health > health.json; then break; fi
+            code=$(curl -s -o health.json -w '%{http_code}' localhost:8000/api/health || true)
+            [ "$code" = "200" ] && break
             sleep 2
           done
-          cat health.json
+          echo "HTTP $code"; cat health.json || true; echo
           python3 -c "import json; h=json.load(open('health.json')); assert h['status']=='ok' and h['database'] is True, h"
-          curl -sf localhost:8000/api/meta | python3 -c "import json,sys; m=json.load(sys.stdin); assert m['ml_backend']=='cpp', m"
+          curl -sf localhost:8000/api/meta | python3 -c "import json,sys; m=json.load(sys.stdin); assert m['ml_backend']=='cpp' and not m['demo'], m"
       - name: Compose logs on failure
         if: failure()
         run: docker compose logs
