@@ -1,16 +1,11 @@
 name: CI
 
-# Раньше в проекте не было CI вообще. Полноценных pytest-тестов тоже
-# нет (test_*.py — ручные скрипты проверки, запускаемые вручную рядом
-# с работающим эмулятором/PostgreSQL), поэтому этот workflow сделан по
-# минимуму, но не бесполезно:
-#   1. Проверка, что все модули scada_core вообще импортируются
-#      (поймало бы, например, синтаксическую ошибку или опечатку в
-#      импорте до того, как это увидит пользователь).
-#   2. Реальный сквозной smoke-test: поднимаем сам эмулятор
-#      (modbus_emulator_new.py) и настоящий PostgreSQL, прогоняем
-#      ручные тестовые скрипты против них — именно так был найден и
-#      подтверждён баг с пустым списком tags в config.yaml.
+# 1. lint      — ruff (Python) + clang-format (C++)
+# 2. native    — сборка C++ ядра с -Wall -Wextra, ctest, на Linux и Windows
+# 3. tests     — полный pytest: C++ ядро + Python fallback, реальный PostgreSQL
+#
+# Прежняя версия запускала python3 test_simple.py из корня, хотя тесты
+# уже были перенесены в tests/, — CI падал на первом же шаге.
 
 on:
   push:
@@ -19,27 +14,34 @@ on:
     branches: [main]
 
 jobs:
-  import-check:
-    name: Import sanity check
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
-      - run: pip install -r requirements.txt
-      - run: |
-          python3 -c "
-          from scada_core.config.loader import get_config, ConfigLoader
-          from scada_core.database.repository import get_repository, DatabaseRepository
-          from scada_core.engine.modbus_client import AsyncModbusManager
-          from scada_core.engine.data_poller import DataPoller
-          print('OK: все модули scada_core импортируются')
-          "
+      - run: pip install ruff
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: clang-format --dry-run --Werror native/src/*.cpp native/include/scada/*.hpp native/tests/*.cpp
 
-  smoke-test:
-    name: Emulator + PostgreSQL smoke test
+  native:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pybind11 cmake ninja
+      - run: cmake -S native -B build/native -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build/native --config Release
+      - run: ctest --test-dir build/native -C Release --output-on-failure
+
+  tests:
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -47,7 +49,7 @@ jobs:
         env:
           POSTGRES_USER: scada
           POSTGRES_PASSWORD: scada_ci_password
-          POSTGRES_DB: scada_generator
+          POSTGRES_DB: postgres
         ports:
           - 5432:5432
         options: >-
@@ -55,35 +57,28 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
-
     env:
-      DB_HOST: localhost
-      DB_PORT: 5432
-      DB_NAME: scada_generator
-      DB_USER: scada
-      DB_PASSWORD: scada_ci_password
-
+      SCADA_TEST_PG: postgresql://scada:scada_ci_password@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements.txt
-
-      - name: Start Modbus emulator
+      - run: pip install -r requirements-dev.txt
+      - name: Build C++ core
         run: |
-          python3 modbus_emulator_new.py > emulator.log 2>&1 &
-          sleep 2
-
-      - name: Run modbus_client smoke test (test_simple.py)
-        run: python3 test_simple.py
-
-      - name: Run DataPoller + PostgreSQL smoke test (test_poller.py)
-        # Скрипт сам работает 30с (await asyncio.sleep(30)) и штатно
-        # завершается — ждём с запасом, без принудительного kill.
-        run: timeout 45 python3 test_poller.py
-
-      - name: Show emulator log on failure
+          cmake -S native -B build/native -G Ninja
+          cmake --build build/native
+      - name: Tests (C++ core)
+        run: python -m pytest -q
+      - name: Tests (pure Python fallback)
+        run: SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q
+      - name: Demo smoke test
+        run: |
+          python run.py --demo --port 8000 > demo.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:8000/api/meta && break; sleep 1; done
+          curl -sf localhost:8000/api/snapshot | python -c "import json,sys; d=json.load(sys.stdin); assert d['tags']"
+      - name: Demo log on failure
         if: failure()
-        run: cat emulator.log
+        run: cat demo.log || true
