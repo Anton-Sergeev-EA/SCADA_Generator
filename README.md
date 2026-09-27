@@ -15,6 +15,7 @@
 | Отказы, невидимые для порогов (утечка, дрейф датчика) | не видны | **PCA-модель** ловит нарушение связей между сигналами и называет виновный тег |
 | Лавина сообщений при пуске/останове | десятки алармов | **группировка по первопричине**: одно событие «смена режима» |
 | Дисциплина алармов | «пишем в БД каждую секунду» | модель состояний **ISA-18.2**, зона возврата, задержка, квитирование, отложенные, KPI **EEMUA 191** |
+| Оборудование | один протокол или «родной» софт производителя | **Modbus TCP/RTU, OPC UA, MQTT, МЭК 104** — любые производители, протоколы можно смешивать |
 | Аналитика | Python/облако | **C++17-ядро** (pybind11), 4,5 млн отсчётов/с из Python, работает в изолированной сети |
 | Языки | один | **русский, английский, китайский** — интерфейс, объяснения ИИ, подписи тегов |
 | Оформление | одна тема | **светлая, тёмная или «как в системе»** — переключатель в шапке, выбор запоминается |
@@ -51,7 +52,7 @@ python run.py --demo --open
 
 ```mermaid
 flowchart LR
-  PLC[(ПЛК / RTU<br>Modbus TCP)] -->|блочное чтение| P[DataPoller<br>asyncio]
+  PLC[(Устройства<br>Modbus TCP/RTU · OPC UA<br>MQTT · МЭК 104)] -->|драйверы| P[DataPoller<br>asyncio]
   YAML[config.yaml] --> G[Генератор HMI] --> UI
   P --> A[Алармы<br>ISA-18.2]
   P --> ML
@@ -136,6 +137,64 @@ flowchart LR
 можно вставить YAML любой другой установки (есть пример котельной) и сразу
 увидеть её мнемосхему, а затем скачать SVG или JSON.
 
+## Протоколы: оборудование любого производителя
+
+SCADA Generator не привязан ни к одному производителю. Устройства подключаются через
+открытые стандарты, и в одной установке можно смешивать протоколы. Алармы, ИИ,
+мнемосхема и архив работают одинаково для всех. Протокол задаётся одной строкой
+у устройства.
+
+| `protocol` | Для чего | Адрес тега | Библиотека (лицензия) |
+|---|---|---|---|
+| `modbus_tcp` | ПЛК, шлюзы, частотники по Ethernet | `address` + `function` | pyModbusTCP (MIT), входит в базовую установку |
+| `modbus_rtu` | RS-485/RS-232, шлюзы «RTU поверх TCP» (`socket://`), RFC 2217 | `address` + `function` | pyserial (BSD) |
+| `opcua` | ПЛК и серверы OPC UA (IEC 62541) любых производителей | `node: "ns=2;s=…"` | asyncua (LGPL-3.0) |
+| `mqtt` | IIoT-шлюзы, беспроводные датчики, брокеры Mosquitto/EMQX | `topic` (+ `json_path`) | aiomqtt (BSD) |
+| `iec104` | телемеханика, подстанции (МЭК 60870-5-104) | `ioa` | c104 (GPL-3.0) |
+
+Драйверы необязательные: ставьте только нужные, например `pip install asyncua` или всё сразу
+`pip install -r requirements-protocols.txt`. Если библиотека не установлена, это
+устройство показывается «без связи» с понятной причиной, а остальные работают.
+
+```yaml
+devices:
+  - id: opc
+    protocol: opcua
+    endpoint: opc.tcp://192.168.1.30:4840
+    username: ${OPCUA_USER:-}
+    password: ${OPCUA_PASSWORD:-}
+    tags:
+      - { name: pump_current, node: "ns=2;s=Pump2.Current", unit: "A", alarm_high: 45 }
+
+  - id: rs485
+    protocol: modbus_rtu
+    serial_port: /dev/ttyUSB0        # или COM3, или socket://шлюз:4001
+    baudrate: 9600
+    slave_id: 2
+    tags:
+      - { name: flow, address: 100, function: input_register, type: float32, unit: "m³/h" }
+
+  - id: substation
+    protocol: iec104
+    host: 192.168.1.40
+    common_address: 1
+    tags:
+      - { name: bus_voltage, ioa: 1001, type: float, unit: "kV" }
+      - { name: setpoint, ioa: 1002, command_ioa: 5001, writable: true }
+
+  - id: sensors
+    protocol: mqtt
+    host: 192.168.1.50
+    stale_s: 120                     # без сообщений дольше — значение «устарело»
+    tags:
+      - { name: well_level, topic: water/well1/telemetry, json_path: level_m, unit: "m" }
+```
+
+Полный пример с пятью протоколами — `configs/examples/multi_protocol.yaml`. Каждый
+драйвер проверяется тестами против настоящего сервера или эмулятора: чтение, запись,
+ошибки устройства, потеря связи и восстановление. В карточке тега видно, откуда
+пришло значение (например «OPC UA · ns=2;s=Pump2.Current»).
+
 ## Docker
 
 ```bash
@@ -214,7 +273,7 @@ python scripts/build_native.py           # CMake + ctest, модуль scada_cor
 ## Разработка
 
 ```bash
-python -m pytest -q                              # 75 тестов, эмулятор поднимается внутри
+python -m pytest -q                              # 85 тестов, эмулятор поднимается внутри
 SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q    # то же на Python-ядре
 SCADA_TEST_PG=postgresql://user:pass@localhost/postgres python -m pytest tests/test_database.py
 ruff check . && ruff format --check .
@@ -236,7 +295,8 @@ SCADA_generator/
 │   ├── ml/                    выбор ядра, Python fallback, PCA-MSPC, движок инсайтов
 │   ├── hmi/generator.py       генератор мнемосхемы
 │   ├── database/              репозиторий PostgreSQL + миграции
-│   ├── sim/                   модель насосной станции + Modbus TCP сервер
+│   ├── drivers/               драйверы протоколов: Modbus TCP/RTU, OPC UA, MQTT, МЭК 104
+│   ├── sim/                   модель станции, Modbus TCP/RTU сервер, тестовый MQTT-брокер
 │   ├── api/server.py          REST + WebSocket
 │   └── runtime.py             сборка системы
 ├── web/                       интерфейс: HTML/CSS/JS без сборщиков, i18n RU/EN/ZH
@@ -246,7 +306,10 @@ SCADA_generator/
 
 ## Ограничения текущей версии
 
-- Протокол — Modbus TCP. Modbus RTU, OPC UA, IEC 60870-5-104 пока не поддерживаются.
+- Протоколы: Modbus TCP/RTU, OPC UA, MQTT, МЭК 60870-5-104. BACnet, PROFINET и
+  EtherNet/IP пока не поддерживаются. Оборудование с ними обычно подключается через
+  OPC UA-шлюз.
+- OPC UA читается опросом, подписки (monitored items) пока не используются.
 - Один узел без резервирования; права доступа — один токен оператора, без ролей.
 - PCA-модель статическая: для процессов с сильной динамикой (большие запаздывания)
   точность атрибуции ниже, чем у динамических моделей.

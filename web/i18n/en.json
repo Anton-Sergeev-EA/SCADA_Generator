@@ -47,6 +47,12 @@
   "empty.alarms": "No active alarms",
   "empty.journal": "Journal is empty",
 
+  "tag.source": "Source",
+  "protocol.modbus_tcp": "Modbus TCP",
+  "protocol.modbus_rtu": "Modbus RTU",
+  "protocol.opcua": "OPC UA",
+  "protocol.mqtt": "MQTT",
+  "protocol.iec104": "IEC 104",
   "tag.value": "Value",
   "tag.expected": "Expected",
   "tag.band": "Normal band",

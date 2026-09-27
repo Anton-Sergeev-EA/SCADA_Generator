@@ -47,6 +47,12 @@
   "empty.alarms": "无活动报警",
   "empty.journal": "日志为空",
 
+  "tag.source": "数据源",
+  "protocol.modbus_tcp": "Modbus TCP",
+  "protocol.modbus_rtu": "Modbus RTU",
+  "protocol.opcua": "OPC UA",
+  "protocol.mqtt": "MQTT",
+  "protocol.iec104": "IEC 104",
   "tag.value": "当前值",
   "tag.expected": "预期值",
   "tag.band": "正常区间",

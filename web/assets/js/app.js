@@ -132,6 +132,8 @@ function renderHeader() {
   core.textContent = t(m.ml_backend === "cpp" ? "top.core_cpp" : "top.core_python");
   core.classList.toggle("ml", m.ml_backend === "cpp");
   $("#db-chip").textContent = t(m.database ? "top.db_on" : "top.db_off");
+  const used = [...new Set((m.devices || []).map((d) => d.protocol))];
+  $("#proto-chips").innerHTML = used.map((p) => `<span class="chip">${esc(t(`protocol.${p}`))}</span>`).join("");
   $("#version").textContent = `v${m.version}`;
   $$(".lang button").forEach((b) => b.classList.toggle("active", b.dataset.lang === getLang()));
   const st = state.hmi?.stats;
@@ -388,6 +390,7 @@ async function renderDrawer(full = false) {
   }
   const lims = Object.entries(m.limits || {});
   if (lims.length) rows.push(["tag.limits", lims.map(([k, v]) => `${k} ${fmtNum(v, m.decimals)}`).join(" · ")]);
+  if (m.source) rows.push(["tag.source", `${t(`protocol.${m.protocol}`)} · ${m.source}`]);
   $("#dr-kv").innerHTML = rows.map(([k, v]) => `<dt>${esc(t(k))}</dt><dd>${esc(v)}</dd>`).join("");
 
   if (full) {

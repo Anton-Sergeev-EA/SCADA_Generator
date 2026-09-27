@@ -14,6 +14,7 @@ SCADA Generator 的做法不同：
 | 阈值无法发现的故障（泄漏、传感器漂移） | 无法发现 | **PCA 模型**发现信号间关联被破坏，并指出责任位号 |
 | 启停时的报警泛滥 | 数十条报警 | **按根因分组**：一个“工况切换”事件 |
 | 报警管理 | “每秒写一次数据库” | **ISA-18.2** 状态模型、回差、延时、确认、搁置、**EEMUA 191** 指标 |
+| 设备 | 单一协议或厂商专用软件 | **Modbus TCP/RTU、OPC UA、MQTT、IEC 104** — 任何厂商，可混用协议 |
 | 分析 | Python / 云端 | **C++17 内核**（pybind11），从 Python 调用可达每秒 450 万样本，可在隔离网络运行 |
 | 语言 | 一种 | **俄语、英语、中文** — 界面、AI 解释、位号名称 |
 | 外观 | 单一主题 | **浅色、深色或跟随系统** — 顶栏切换，自动记住选择 |
@@ -73,6 +74,24 @@ python run.py --demo --open
 在 **“生成器”** 页面可粘贴任意装置的 YAML（内置锅炉房示例），立即查看工艺画面并下载
 SVG 或 JSON。
 
+## 协议：任何厂商的设备
+
+SCADA Generator 不绑定任何厂商。设备通过开放标准接入，同一装置中可以混用多种协议，报警、AI、
+工艺画面和归档对所有设备的工作方式完全相同。协议只需在设备上写一行。
+
+| `protocol` | 用途 | 位号地址 | 库（许可证） |
+|---|---|---|---|
+| `modbus_tcp` | 以太网 PLC、网关、变频器 | `address` + `function` | pyModbusTCP（MIT），内置 |
+| `modbus_rtu` | RS-485/RS-232、RTU over TCP 网关（`socket://`）、RFC 2217 | `address` + `function` | pyserial（BSD） |
+| `opcua` | 任意厂商的 OPC UA（IEC 62541）PLC 和服务器 | `node: "ns=2;s=…"` | asyncua（LGPL-3.0） |
+| `mqtt` | IIoT 网关、无线传感器、Mosquitto/EMQX | `topic`（+ `json_path`） | aiomqtt（BSD） |
+| `iec104` | 远动、变电站（IEC 60870-5-104） | `ioa` | c104（GPL-3.0） |
+
+驱动为可选项：只安装需要的（`pip install asyncua`，或 `pip install -r requirements-protocols.txt`
+全部安装）。缺少库的设备显示为离线并给出原因，其余设备照常工作。五种协议的完整示例见
+`configs/examples/multi_protocol.yaml`。每个驱动都针对真实服务器或仿真器测试：读、写、设备错误、
+断线与恢复。
+
 ## Docker
 
 ```bash
@@ -107,13 +126,15 @@ python run.py --no-db         # 不使用 PostgreSQL
 ```bash
 pip install -r requirements-dev.txt
 python scripts/build_native.py                   # CMake + ctest
-python -m pytest -q                              # 75 个测试，仿真器在测试内启动
+python -m pytest -q                              # 85 个测试，仿真器在测试内启动
 SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q    # 在 Python 内核上运行相同测试
 ```
 
 ## 当前限制
 
-- 仅支持 Modbus TCP；尚不支持 Modbus RTU、OPC UA、IEC 60870-5-104。
+- 协议：Modbus TCP/RTU、OPC UA、MQTT、IEC 60870-5-104。尚不支持 BACnet、PROFINET、EtherNet/IP，
+  此类设备通常通过 OPC UA 网关接入。
+- OPC UA 采用轮询读取，尚未使用订阅（monitored items）。
 - 单节点、无冗余；访问控制为单一操作员令牌，无角色划分。
 - PCA 模型为静态模型，对大滞后过程的归因精度低于动态模型。
 - 预测报警基于趋势外推：可预警逐渐发展的工况，无法预警突发故障。

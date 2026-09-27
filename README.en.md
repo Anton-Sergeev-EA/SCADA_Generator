@@ -15,6 +15,7 @@ alarms that fire when it is already too late. SCADA Generator works differently:
 | Faults invisible to thresholds (leaks, sensor drift) | not visible | a **PCA model** detects broken relationships between signals and names the responsible tag |
 | Message flood on start/stop | dozens of alarms | **root-cause grouping**: one “mode change” event |
 | Alarm discipline | “write to the DB every second” | **ISA-18.2** state model, deadband, on-delay, acknowledgement, shelving, **EEMUA 191** KPIs |
+| Equipment | one protocol or the vendor's own software | **Modbus TCP/RTU, OPC UA, MQTT, IEC 104** — any vendor, protocols can be mixed |
 | Analytics | Python / cloud | **C++17 core** (pybind11), 4.5 M samples/s from Python, runs air-gapped |
 | Languages | one | **Russian, English, Chinese** — UI, AI explanations, tag labels |
 | Appearance | one theme | **light, dark or follow system** — switch in the header, remembered per browser |
@@ -51,7 +52,7 @@ predicted alarms and no drifts; only occasional noise spikes are possible.
 
 ```mermaid
 flowchart LR
-  PLC[(PLC / RTU<br>Modbus TCP)] -->|block reads| P[DataPoller<br>asyncio]
+  PLC[(Devices<br>Modbus TCP/RTU · OPC UA<br>MQTT · IEC 104)] -->|drivers| P[DataPoller<br>asyncio]
   YAML[config.yaml] --> G[HMI generator] --> UI
   P --> A[Alarms<br>ISA-18.2]
   P --> ML
@@ -109,6 +110,26 @@ come from the environment: `host: ${PLC_HOST:-localhost}`. On the
 **Generator** page you can paste the YAML of any other plant (a boiler-house
 example is included), see its process view instantly and download SVG or JSON.
 
+## Protocols: equipment from any vendor
+
+SCADA Generator is not tied to any vendor. Devices connect over open standards, and
+protocols can be mixed in one plant. Alarms, AI, the process view and the archive
+work the same for all of them. The protocol is one line on the device.
+
+| `protocol` | Use | Tag address | Library (license) |
+|---|---|---|---|
+| `modbus_tcp` | PLCs, gateways, drives over Ethernet | `address` + `function` | pyModbusTCP (MIT), built in |
+| `modbus_rtu` | RS-485/RS-232, RTU-over-TCP gateways (`socket://`), RFC 2217 | `address` + `function` | pyserial (BSD) |
+| `opcua` | OPC UA (IEC 62541) PLCs and servers of any vendor | `node: "ns=2;s=…"` | asyncua (LGPL-3.0) |
+| `mqtt` | IIoT gateways, wireless sensors, Mosquitto/EMQX | `topic` (+ `json_path`) | aiomqtt (BSD) |
+| `iec104` | telecontrol, substations (IEC 60870-5-104) | `ioa` | c104 (GPL-3.0) |
+
+Drivers are optional: install only what you need (`pip install asyncua`, or everything
+with `pip install -r requirements-protocols.txt`). A device whose library is missing is
+shown offline with a clear reason; the others keep working. A full five-protocol
+example is in `configs/examples/multi_protocol.yaml`. Every driver is tested against a
+real server or emulator: reads, writes, device errors, link loss and recovery.
+
 ## Docker
 
 ```bash
@@ -149,14 +170,16 @@ python run.py --no-db         # without PostgreSQL
 ```bash
 pip install -r requirements-dev.txt
 python scripts/build_native.py                   # CMake + ctest
-python -m pytest -q                              # 75 tests, the emulator starts inside
+python -m pytest -q                              # 85 tests, the emulator starts inside
 SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q    # same on the Python core
 ruff check . && ruff format --check .
 ```
 
 ## Current limitations
 
-- Modbus TCP only; Modbus RTU, OPC UA and IEC 60870-5-104 are not supported yet.
+- Protocols: Modbus TCP/RTU, OPC UA, MQTT, IEC 60870-5-104. BACnet, PROFINET and
+  EtherNet/IP are not supported yet; such equipment is usually connected via an OPC UA gateway.
+- OPC UA is polled; subscriptions (monitored items) are not used yet.
 - Single node without redundancy; access control is one operator token, no roles.
 - The PCA model is static; attribution is less accurate for processes with long
   dead times than a dynamic model would be.

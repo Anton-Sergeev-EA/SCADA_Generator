@@ -47,6 +47,12 @@
   "empty.alarms": "Активных алармов нет",
   "empty.journal": "Журнал пуст",
 
+  "tag.source": "Источник",
+  "protocol.modbus_tcp": "Modbus TCP",
+  "protocol.modbus_rtu": "Modbus RTU",
+  "protocol.opcua": "OPC UA",
+  "protocol.mqtt": "MQTT",
+  "protocol.iec104": "МЭК 104",
   "tag.value": "Значение",
   "tag.expected": "Ожидалось",
   "tag.band": "Коридор нормы",
