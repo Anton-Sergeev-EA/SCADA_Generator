@@ -107,18 +107,22 @@ SCADA_API_TOKEN=secret DB_PASSWORD=pass docker compose up --build
 ## 生产环境
 
 ```bash
-cp .env.example .env          # DB_*, SCADA_API_TOKEN
+cp .env.example .env          # DB_*、SCADA_API_TOKEN、设备地址
+pip install -r requirements-protocols.txt   # RTU、OPC UA、MQTT、IEC 104 驱动（按需）
+python run.py --check         # 检查与每台设备的通信，不写入任何数据
 python run.py                 # 轮询 + 归档 + 界面
 python run.py --no-web        # 无界面后台服务
 python run.py --no-db         # 不使用 PostgreSQL
 ```
 
+- **调试投运**：`--check` 连接配置中的每台设备并读取全部位号，一切正常时返回 0，否则返回 1，
+  并为每台设备给出一行原因，适用于现场验收和部署脚本。
 - **PostgreSQL**：版本化迁移。0.x 版本的数据库会自动升级：时间转换为 `TIMESTAMPTZ`
   且不丢失时刻，增加 `(tag_id, timestamp)` 索引，每次报警激活只占一行。
 - **安全**：默认只监听 `127.0.0.1`；设置 `SCADA_API_TOKEN` 后，控制命令需要
   `X-API-Token` 请求头；只允许写入 `writable: true` 且在 `min..max` 范围内的位号；
   界面不依赖 CDN 和外部字体，可在隔离的工控网络中使用。
-- **监控**：`/api/health` 返回 200 或 503（设备或数据库不可用），`/api/health/live` 为存活探针。
+- **监控**：`/api/health` 返回 200 或 503（设备或数据库不可用，原因见 `device_errors`），`/api/health/live` 为存活探针。
 - **API**：见俄文 README 中的表格，或访问 `/docs` 查看交互式文档。
 
 ## 构建与测试
@@ -126,14 +130,15 @@ python run.py --no-db         # 不使用 PostgreSQL
 ```bash
 pip install -r requirements-dev.txt
 python scripts/build_native.py                   # CMake + ctest
-python -m pytest -q                              # 85 个测试，仿真器在测试内启动
+python -m pytest -q                              # 88 个测试，仿真器在测试内启动
 SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q    # 在 Python 内核上运行相同测试
 ```
 
 ## 当前限制
 
 - 协议：Modbus TCP/RTU、OPC UA、MQTT、IEC 60870-5-104。尚不支持 BACnet、PROFINET、EtherNet/IP，
-  此类设备通常通过 OPC UA 网关接入。
+  此类设备通常通过 OPC UA 网关接入。未实现西门子私有的 S7 协议：S7-1200（固件 4.4+）和 S7-1500
+  内置 OPC UA 服务器，其他型号可使用 Modbus TCP 或网关。
 - OPC UA 采用轮询读取，尚未使用订阅（monitored items）。
 - 单节点、无冗余；访问控制为单一操作员令牌，无角色划分。
 - PCA 模型为静态模型，对大滞后过程的归因精度低于动态模型。

@@ -146,12 +146,17 @@ unprivileged user and has a `HEALTHCHECK`.
 ## Production use
 
 ```bash
-cp .env.example .env          # DB_*, SCADA_API_TOKEN
+cp .env.example .env          # DB_*, SCADA_API_TOKEN, device addresses
+pip install -r requirements-protocols.txt   # RTU, OPC UA, MQTT, IEC 104 drivers (if needed)
+python run.py --check         # test the link to every device; writes nothing
 python run.py                 # polling + archive + UI
 python run.py --no-web        # headless service (as in 0.x)
 python run.py --no-db         # without PostgreSQL
 ```
 
+- **Commissioning:** `--check` connects to every configured device, reads all tags
+  and exits with 0 when everything is fine or 1 otherwise, with a one-line reason
+  per device — handy for site acceptance and deployment scripts.
 - **PostgreSQL:** versioned migrations (`schema_migrations`). A 0.x database is
   upgraded automatically: timestamps become `TIMESTAMPTZ` with no loss of
   instants, an index on `(tag_id, timestamp)` is added, and each alarm is one row
@@ -161,7 +166,8 @@ python run.py --no-db         # without PostgreSQL
   control commands require an `X-API-Token` header. Writes are allowed only for
   `writable: true` tags within `min..max`, and every command is journaled. No
   CDN or external fonts are used — the UI works on isolated control networks.
-- **Monitoring:** `/api/health` returns 200 or 503 (device or database down),
+- **Monitoring:** `/api/health` returns 200 or 503 (device or database down, the reason is in
+  `device_errors`),
   `/api/health/live` is a liveness probe.
 - **API:** see the table in the Russian README or the interactive docs at `/docs`.
 
@@ -170,7 +176,7 @@ python run.py --no-db         # without PostgreSQL
 ```bash
 pip install -r requirements-dev.txt
 python scripts/build_native.py                   # CMake + ctest
-python -m pytest -q                              # 85 tests, the emulator starts inside
+python -m pytest -q                              # 88 tests, the emulator starts inside
 SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q    # same on the Python core
 ruff check . && ruff format --check .
 ```
@@ -178,7 +184,9 @@ ruff check . && ruff format --check .
 ## Current limitations
 
 - Protocols: Modbus TCP/RTU, OPC UA, MQTT, IEC 60870-5-104. BACnet, PROFINET and
-  EtherNet/IP are not supported yet; such equipment is usually connected via an OPC UA gateway.
+  EtherNet/IP are not supported yet; such equipment is usually connected via an OPC UA gateway. The proprietary Siemens S7
+  protocol is not implemented: S7-1200 (firmware 4.4+) and S7-1500 have a built-in OPC UA
+  server, other models can use Modbus TCP or a gateway.
 - OPC UA is polled; subscriptions (monitored items) are not used yet.
 - Single node without redundancy; access control is one operator token, no roles.
 - The PCA model is static; attribution is less accurate for processes with long

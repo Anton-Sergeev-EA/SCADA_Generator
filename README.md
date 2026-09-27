@@ -212,10 +212,22 @@ SCADA_API_TOKEN=секрет DB_PASSWORD=пароль docker compose up --build
 ## Работа с реальным оборудованием
 
 ```bash
-cp .env.example .env          # DB_*, SCADA_API_TOKEN
+cp .env.example .env          # DB_*, SCADA_API_TOKEN, адреса устройств
+pip install -r requirements-protocols.txt   # драйверы RTU, OPC UA, MQTT, МЭК 104 (если нужны)
+python run.py --check         # проверка связи с каждым устройством, ничего не пишет
 python run.py                 # опрос устройств + архив + интерфейс
 python run.py --no-web        # фоновый сервис без интерфейса (как в 0.x)
 python run.py --no-db         # без PostgreSQL
+```
+
+**Проверка перед пуском.** `--check` подключается к каждому устройству из
+конфигурации, читает все теги и завершается с кодом 0, если всё в порядке, или 1,
+если есть проблемы. Удобно при пусконаладке и в скриптах развёртывания:
+
+```
+[OK  ] plc (modbus_tcp 192.168.1.10:502): 1/1 тегов — связь есть
+[FAIL] rs485 (modbus_rtu /dev/ttyUSB0 9600 8N1): 0/2 тегов — could not open port /dev/ttyUSB0
+[WARN] sensors (mqtt 192.168.1.50:1883): 1/2 тегов — нет данных: pump_room_temp
 ```
 
 Без обученной модели ИИ на реальном объекте начинает работать постепенно:
@@ -242,7 +254,7 @@ python run.py --no-db         # без PostgreSQL
 
 | Метод | Путь | Назначение |
 |---|---|---|
-| GET | `/api/health` | готовность: 200 или 503 (нет связи с устройством или БД) |
+| GET | `/api/health` | готовность: 200 или 503 (нет связи с устройством или БД), причина в `device_errors` |
 | GET | `/api/health/live` | жив ли процесс (для Docker/Kubernetes) |
 | GET | `/api/meta` | версия, язык по умолчанию, ядро (C++/Python), демо |
 | GET | `/api/hmi` | сгенерированная мнемосхема |
@@ -273,7 +285,7 @@ python scripts/build_native.py           # CMake + ctest, модуль scada_cor
 ## Разработка
 
 ```bash
-python -m pytest -q                              # 85 тестов, эмулятор поднимается внутри
+python -m pytest -q                              # 88 тестов, эмулятор поднимается внутри
 SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q    # то же на Python-ядре
 SCADA_TEST_PG=postgresql://user:pass@localhost/postgres python -m pytest tests/test_database.py
 ruff check . && ruff format --check .
@@ -287,7 +299,7 @@ PostgreSQL (тесты БД обязательны, покрытие не ниж
 
 ```
 SCADA_generator/
-├── run.py                     точка входа (--demo, --no-web, --no-db)
+├── run.py                     точка входа (--demo, --check, --no-web, --no-db)
 ├── configs/config.yaml        описание установки
 ├── native/                    C++17 ядро: детектор, прогноз, pybind11, тесты
 ├── scada_core/
@@ -297,6 +309,7 @@ SCADA_generator/
 │   ├── database/              репозиторий PostgreSQL + миграции
 │   ├── drivers/               драйверы протоколов: Modbus TCP/RTU, OPC UA, MQTT, МЭК 104
 │   ├── sim/                   модель станции, Modbus TCP/RTU сервер, тестовый MQTT-брокер
+│   ├── commissioning.py       проверка связи перед пуском (--check)
 │   ├── api/server.py          REST + WebSocket
 │   └── runtime.py             сборка системы
 ├── web/                       интерфейс: HTML/CSS/JS без сборщиков, i18n RU/EN/ZH
@@ -308,7 +321,8 @@ SCADA_generator/
 
 - Протоколы: Modbus TCP/RTU, OPC UA, MQTT, МЭК 60870-5-104. BACnet, PROFINET и
   EtherNet/IP пока не поддерживаются. Оборудование с ними обычно подключается через
-  OPC UA-шлюз.
+  OPC UA-шлюз. Закрытый протокол Siemens S7 не реализован: у S7-1200 (прошивка 4.4+)
+  и S7-1500 есть встроенный сервер OPC UA, у остальных — Modbus TCP или шлюз.
 - OPC UA читается опросом, подписки (monitored items) пока не используются.
 - Один узел без резервирования; права доступа — один токен оператора, без ролей.
 - PCA-модель статическая: для процессов с сильной динамикой (большие запаздывания)
