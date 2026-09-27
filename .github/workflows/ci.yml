@@ -2,7 +2,9 @@ name: CI
 
 # 1. lint      — ruff (Python) + clang-format (C++)
 # 2. native    — сборка C++ ядра с -Wall -Wextra, ctest, на Linux и Windows
-# 3. tests     — полный pytest: C++ ядро + Python fallback, реальный PostgreSQL
+# 3. tests     — pytest на Python 3.10 и 3.12: C++ ядро (с порогом покрытия)
+#                и Python fallback, обязательные тесты реального PostgreSQL
+# 4. docker     — сборка образа и запуск всего стенда через docker compose
 #
 # Прежняя версия запускала python3 test_simple.py из корня, хотя тесты
 # уже были перенесены в tests/, — CI падал на первом же шаге.
@@ -42,6 +44,10 @@ jobs:
       - run: ctest --test-dir build/native -C Release --output-on-failure
 
   tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -59,26 +65,50 @@ jobs:
           --health-retries 10
     env:
       SCADA_TEST_PG: postgresql://scada:scada_ci_password@localhost:5432/postgres
+      # Тесты БД обязательны: без SCADA_TEST_PG они упадут, а не пропустятся.
+      SCADA_REQUIRE_PG: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
           cache: pip
       - run: pip install -r requirements-dev.txt
       - name: Build C++ core
         run: |
           cmake -S native -B build/native -G Ninja
           cmake --build build/native
-      - name: Tests (C++ core)
-        run: python -m pytest -q
+      - name: Tests (C++ core) with coverage gate
+        run: python -m pytest -q -rs --cov=scada_core --cov-report=term --cov-fail-under=85
       - name: Tests (pure Python fallback)
-        run: SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q
+        run: SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q -rs
       - name: Demo smoke test
         run: |
           python run.py --demo --port 8000 > demo.log 2>&1 &
-          for i in $(seq 1 30); do curl -sf localhost:8000/api/meta && break; sleep 1; done
+          for i in $(seq 1 30); do curl -sf localhost:8000/api/health && break; sleep 1; done
           curl -sf localhost:8000/api/snapshot | python -c "import json,sys; d=json.load(sys.stdin); assert d['tags']"
       - name: Demo log on failure
         if: failure()
         run: cat demo.log || true
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image and start the full stack (PLC emulator + PostgreSQL + SCADA)
+        run: docker compose up -d --build
+      - name: Wait until the stack is ready
+        run: |
+          for i in $(seq 1 60); do
+            if curl -sf localhost:8000/api/health > health.json; then break; fi
+            sleep 2
+          done
+          cat health.json
+          python3 -c "import json; h=json.load(open('health.json')); assert h['status']=='ok' and h['database'] is True, h"
+          curl -sf localhost:8000/api/meta | python3 -c "import json,sys; m=json.load(sys.stdin); assert m['ml_backend']=='cpp', m"
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
