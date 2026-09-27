@@ -1,64 +1,38 @@
-# start.ps1 - SCADA Generator Auto-start Script
+# start.ps1 - SCADA Generator: запуск на Windows
+#   .\start.ps1          — демо-режим (модель установки + ИИ + интерфейс)
+#   .\start.ps1 -Prod    — реальные устройства из configs\config.yaml
+param([switch]$Prod)
 
 Write-Host "==================================================" -ForegroundColor Cyan
-Write-Host "🚀 SCADA Generator - Auto Startup" -ForegroundColor Yellow
+Write-Host " SCADA Generator" -ForegroundColor Yellow
 Write-Host "==================================================" -ForegroundColor Cyan
 
-# Check if .env exists
-if (-not (Test-Path ".env")) {
-    Write-Host "⚠ .env file not found, creating from template..." -ForegroundColor Yellow
-    if (Test-Path ".env.example") {
-        Copy-Item ".env.example" ".env"
-        Write-Host "✅ .env file created from template" -ForegroundColor Green
-        Write-Host "📝 Please edit .env file with your database password" -ForegroundColor Cyan
-    } else {
-        Write-Host "❌ .env.example not found" -ForegroundColor Red
-        exit 1
+if (-not (Test-Path ".env") -and (Test-Path ".env.example")) {
+    Copy-Item ".env.example" ".env"
+    Write-Host "Создан .env из шаблона — укажите пароль PostgreSQL и SCADA_API_TOKEN" -ForegroundColor Yellow
+}
+
+if (-not (Test-Path "venv")) {
+    Write-Host "1. Создание виртуального окружения..." -ForegroundColor White
+    python -m venv venv
+}
+.\venv\Scripts\Activate.ps1
+
+Write-Host "2. Установка зависимостей..." -ForegroundColor White
+pip install -q -r requirements.txt
+
+Write-Host "3. C++ ядро аналитики..." -ForegroundColor White
+if (-not (Get-ChildItem "scada_core\ml\_native*.pyd" -ErrorAction SilentlyContinue)) {
+    pip install -q pybind11 cmake ninja
+    python scripts\build_native.py
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "   Не удалось собрать (нужен Visual Studio Build Tools) — работаем на Python-ядре" -ForegroundColor Yellow
     }
 }
 
-# Activate virtual environment
-Write-Host "`n1. Activating virtual environment..." -ForegroundColor White
-if (Test-Path "venv") {
-    .\venv\Scripts\Activate.ps1
-    Write-Host "   ✅ Virtual environment activated" -ForegroundColor Green
+Write-Host "4. Запуск..." -ForegroundColor White
+if ($Prod) {
+    python run.py --open
 } else {
-    Write-Host "   ⚠ Virtual environment not found" -ForegroundColor Yellow
-    Write-Host "   Run: python -m venv venv" -ForegroundColor Cyan
+    python run.py --demo --open
 }
-
-# Check dependencies
-Write-Host "`n2. Checking dependencies..." -ForegroundColor White
-if (Test-Path "requirements.txt") {
-    pip install -r requirements.txt
-    Write-Host "   ✅ Dependencies installed" -ForegroundColor Green
-} else {
-    Write-Host "   ❌ requirements.txt not found" -ForegroundColor Red
-    exit 1
-}
-
-# Check PostgreSQL
-Write-Host "`n3. Checking PostgreSQL..." -ForegroundColor White
-$pgService = Get-Service postgresql* -ErrorAction SilentlyContinue
-if ($pgService) {
-    if ($pgService.Status -eq 'Running') {
-        Write-Host "   ✅ PostgreSQL is running" -ForegroundColor Green
-    } else {
-        Write-Host "   ⚠ PostgreSQL is not running, starting..." -ForegroundColor Yellow
-        Start-Service $pgService.Name
-        Start-Sleep 3
-    }
-} else {
-    Write-Host "   ⚠ PostgreSQL service not found" -ForegroundColor Yellow
-}
-
-# Start application
-Write-Host "`n4. Starting SCADA Generator..." -ForegroundColor White
-Write-Host "   ▶ Launching background polling service (run.py)..." -ForegroundColor Yellow
-Write-Host "   Press Ctrl+C to stop." -ForegroundColor Cyan
-
-python run.py
-
-Write-Host "`n==================================================" -ForegroundColor Cyan
-Write-Host "🔚 SCADA Generator finished" -ForegroundColor Green
-Write-Host "==================================================" -ForegroundColor Cyan
