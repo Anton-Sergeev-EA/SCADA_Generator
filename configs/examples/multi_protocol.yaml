@@ -1,0 +1,80 @@
+# Пример: одна установка, оборудование разных производителей и протоколов.
+# Алармы, ИИ, мнемосхема и архив работают одинаково для всех устройств.
+#
+#   SCADA_CONFIG=configs/examples/multi_protocol.yaml python run.py
+#
+# Адреса берутся из окружения (.env), значения после «:-» — по умолчанию.
+
+project:
+  name: { ru: "Водоканал: насосная и подстанция", en: "Water utility: pumps and substation", zh: "水务：泵站与变电站" }
+  flow: [intake, tank, pumps, power, telemetry]
+  groups:
+    intake:    { ru: "Водозабор", en: "Intake", zh: "取水" }
+    tank:      { ru: "Резервуар", en: "Tank", zh: "储罐" }
+    pumps:     { ru: "Насосы", en: "Pumps", zh: "泵" }
+    power:     { ru: "Электроснабжение", en: "Power supply", zh: "供电" }
+    telemetry: { ru: "Телеметрия", en: "Telemetry", zh: "遥测" }
+
+devices:
+  # ПЛК по Ethernet — Modbus TCP
+  - id: plc
+    protocol: modbus_tcp
+    host: ${PLC_HOST:-192.168.1.10}
+    port: 502
+    slave_id: 1
+    tags:
+      - { name: tank_level, label: { ru: "Уровень", en: "Level", zh: "液位" }, address: 0,
+          type: int16, scale: 0.1, unit: "%", min: 0, max: 100, alarm_high: 85, alarm_low: 20, group: tank }
+
+  # Расходомер и частотник на линии RS-485 — Modbus RTU.
+  # Через Ethernet-шлюз: serial_port: socket://192.168.1.20:4001
+  - id: rs485
+    protocol: modbus_rtu
+    serial_port: ${RS485_PORT:-/dev/ttyUSB0}
+    baudrate: 9600
+    parity: N
+    stopbits: 1
+    slave_id: 2
+    tags:
+      - { name: intake_flow, label: { ru: "Расход на входе", en: "Intake flow", zh: "进水流量" },
+          address: 100, function: input_register, type: float32, unit: "m³/h", min: 0, max: 200, group: intake }
+      - { name: vfd_speed, label: { ru: "Частота привода", en: "Drive frequency", zh: "变频器频率" },
+          address: 8193, scale: 0.01, unit: "Hz", min: 0, max: 50, group: pumps, widget: pump }
+
+  # Контроллер с сервером OPC UA (подходит для ПЛК большинства производителей)
+  - id: opc
+    protocol: opcua
+    endpoint: ${OPCUA_ENDPOINT:-opc.tcp://192.168.1.30:4840}
+    username: ${OPCUA_USER:-}
+    password: ${OPCUA_PASSWORD:-}
+    tags:
+      - { name: pump2_current, label: { ru: "Ток насоса 2", en: "Pump 2 current", zh: "2号泵电流" },
+          node: "ns=2;s=Pump2.Current", unit: "A", min: 0, max: 60, alarm_high: 45, group: pumps }
+      - { name: pump2_run, label: { ru: "Насос 2 в работе", en: "Pump 2 running", zh: "2号泵运行" },
+          node: "ns=2;s=Pump2.Run", type: bool, writable: true, group: pumps }
+
+  # Подстанция — телемеханика МЭК 60870-5-104
+  - id: substation
+    protocol: iec104
+    host: ${RTU_HOST:-192.168.1.40}
+    port: 2404
+    common_address: 1
+    tags:
+      - { name: bus_voltage, label: { ru: "Напряжение шины", en: "Bus voltage", zh: "母线电压" },
+          ioa: 1001, type: float, unit: "kV", min: 0, max: 12, alarm_low: 9.5, alarm_high: 11, group: power }
+      - { name: feeder_breaker, label: { ru: "Выключатель фидера", en: "Feeder breaker", zh: "馈线断路器" },
+          ioa: 2001, type: bool, group: power }
+
+  # Беспроводные датчики через IIoT-шлюз — MQTT
+  - id: sensors
+    protocol: mqtt
+    host: ${MQTT_HOST:-192.168.1.50}
+    port: 1883
+    username: ${MQTT_USER:-}
+    password: ${MQTT_PASSWORD:-}
+    stale_s: 120
+    tags:
+      - { name: well_level, label: { ru: "Уровень в скважине", en: "Well level", zh: "井水位" },
+          topic: water/well1/telemetry, json_path: level_m, unit: "m", min: 0, max: 50, group: telemetry }
+      - { name: pump_room_temp, label: { ru: "Температура в насосной", en: "Pump room temperature", zh: "泵房温度" },
+          topic: water/pumproom/temp, unit: "°C", min: -30, max: 60, alarm_low: 5, group: telemetry }

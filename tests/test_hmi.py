@@ -42,3 +42,15 @@ def test_groups_default_to_device() -> None:
     cfg = parse_config_text("devices: [{id: rtu, host: h, tags: [{name: a, address: 0}]}]")
     hmi = generate_hmi(cfg)
     assert hmi["areas"][0]["id"] == "rtu"
+
+
+def test_multi_protocol_example_is_valid_and_shows_sources() -> None:
+    cfg = load_app_config(ROOT / "configs" / "examples" / "multi_protocol.yaml")
+    assert {d.protocol for d in cfg.devices} == {"modbus_tcp", "modbus_rtu", "opcua", "iec104", "mqtt"}
+    hmi = generate_hmi(cfg)
+    widgets = {w["tag"]: w for a in hmi["areas"] for w in [a["main"], *a["tiles"]] if w}
+    assert widgets["pump2_current"]["source"] == "ns=2;s=Pump2.Current"
+    assert widgets["bus_voltage"]["source"] == "IOA 1001"
+    assert widgets["well_level"]["source"] == "water/well1/telemetry → level_m"
+    assert widgets["intake_flow"]["source"] == "IR 100"
+    assert widgets["feeder_breaker"]["bit"] is True

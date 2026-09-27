@@ -160,3 +160,51 @@ class ModbusTCPServer:
                 self._handlers.discard(task)
             writer.close()
             logger.debug("client disconnected: %s", peer)
+
+
+class ModbusRTUOverTCPServer(ModbusTCPServer):
+    """Slave Modbus RTU поверх TCP — так работают шлюзы RS-485/Ethernet
+    в «прозрачном» режиме. Кадры: адрес + PDU + CRC-16, без заголовка MBAP.
+    Используется в тестах драйвера RTU (serial_port: socket://хост:порт)."""
+
+    def __init__(self, store: DataStore, host: str = "0.0.0.0", port: int = 4001, unit: int = 1) -> None:
+        super().__init__(store, host, port)
+        self.unit = unit
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        from scada_core.drivers.modbus_pdu import rtu_check, rtu_frame
+
+        self._clients.add(writer)
+        task = asyncio.current_task()
+        if task is not None:
+            self._handlers.add(task)
+        try:
+            while True:
+                head = await reader.readexactly(2)  # адрес, функция
+                fc = head[1]
+                if fc in (0x0F, 0x10):
+                    fixed = await reader.readexactly(5)
+                    rest = await reader.readexactly(fixed[4] + 2)
+                    frame = head + fixed + rest
+                else:
+                    frame = head + await reader.readexactly(6)
+                try:
+                    body = rtu_check(frame)
+                except ValueError:
+                    continue  # битый кадр: slave молчит, как настоящий
+                if body[0] != self.unit:
+                    continue
+                self.requests += 1
+                try:
+                    reply = process_pdu(self.store, body[1:])
+                except ModbusError as err:
+                    reply = bytes([fc | 0x80, err.code])
+                writer.write(rtu_frame(self.unit, reply))
+                await writer.drain()
+        except (asyncio.IncompleteReadError, ConnectionError, asyncio.CancelledError):
+            pass
+        finally:
+            self._clients.discard(writer)
+            if task is not None:
+                self._handlers.discard(task)
+            writer.close()
