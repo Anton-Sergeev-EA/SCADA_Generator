@@ -129,10 +129,26 @@ flowchart LR
 ```
 
 Порядок узлов на схеме задаёт `project.flow`, подписи узлов — `project.groups`.
+Значения можно брать из окружения: `host: ${PLC_HOST:-localhost}` — переменная
+`PLC_HOST`, иначе `localhost`. Так один файл работает на стенде, в Docker и на объекте.
 Конфигурация проверяется при запуске: все ошибки выводятся сразу, с путём
 (`devices[0].tags[3].address: обязательное поле`). На вкладке **«Генератор»**
 можно вставить YAML любой другой установки (есть пример котельной) и сразу
 увидеть её мнемосхему, а затем скачать SVG или JSON.
+
+## Docker
+
+```bash
+docker build -t scada-generator .
+docker run --rm -p 127.0.0.1:8000:8000 scada-generator        # демо
+
+SCADA_API_TOKEN=секрет DB_PASSWORD=пароль docker compose up --build
+```
+
+`docker compose` поднимает полный стенд: эмулятор ПЛК, PostgreSQL и SCADA в рабочем
+режиме (без `--demo`). Для реального объекта уберите сервис `plc-sim` и задайте
+`PLC_HOST`/`PLC_PORT`. Образ собирает C++ ядро и прогоняет его тесты, работает от
+непривилегированного пользователя, имеет `HEALTHCHECK`. Обученные модели хранятся в томе `models`.
 
 ## Работа с реальным оборудованием
 
@@ -167,6 +183,8 @@ python run.py --no-db         # без PostgreSQL
 
 | Метод | Путь | Назначение |
 |---|---|---|
+| GET | `/api/health` | готовность: 200 или 503 (нет связи с устройством или БД) |
+| GET | `/api/health/live` | жив ли процесс (для Docker/Kubernetes) |
 | GET | `/api/meta` | версия, язык по умолчанию, ядро (C++/Python), демо |
 | GET | `/api/hmi` | сгенерированная мнемосхема |
 | POST | `/api/hmi/preview` | YAML → мнемосхема или список ошибок (422) |
@@ -196,7 +214,7 @@ python scripts/build_native.py           # CMake + ctest, модуль scada_cor
 ## Разработка
 
 ```bash
-python -m pytest -q                              # 69 тестов, эмулятор поднимается внутри
+python -m pytest -q                              # 75 тестов, эмулятор поднимается внутри
 SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q    # то же на Python-ядре
 SCADA_TEST_PG=postgresql://user:pass@localhost/postgres python -m pytest tests/test_database.py
 ruff check . && ruff format --check .
@@ -204,7 +222,9 @@ ctest --test-dir build/native
 ```
 
 CI (GitHub Actions) проверяет линт Python и C++, собирает ядро на Linux и
-Windows, прогоняет тесты на обоих ядрах с реальным PostgreSQL и запускает демо.
+Windows, прогоняет тесты на Python 3.10 и 3.12 на обоих ядрах с реальным
+PostgreSQL (тесты БД обязательны, покрытие не ниже 85 %), запускает демо и
+поднимает весь Docker-стенд. История изменений — в [CHANGELOG.md](CHANGELOG.md).
 
 ```
 SCADA_generator/

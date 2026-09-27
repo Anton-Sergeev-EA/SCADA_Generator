@@ -104,9 +104,23 @@ Everything lives in `configs/config.yaml`. A minimal tag needs only `name` and
 the same: `type`, `scale`, `offset`, `unit`, `min`, `max`, `alarm_hh`,
 `alarm_high`, `alarm_low`, `alarm_ll`, `deadband`, `on_delay_s`, `group`,
 `widget`, `writable`, `ml`, `label: {ru, en, zh}`. The configuration is
-validated at startup, and every error is reported with its path. On the
+validated at startup, and every error is reported with its path. Values can
+come from the environment: `host: ${PLC_HOST:-localhost}`. On the
 **Generator** page you can paste the YAML of any other plant (a boiler-house
 example is included), see its process view instantly and download SVG or JSON.
+
+## Docker
+
+```bash
+docker build -t scada-generator .
+docker run --rm -p 127.0.0.1:8000:8000 scada-generator        # demo
+SCADA_API_TOKEN=secret DB_PASSWORD=pass docker compose up --build
+```
+
+`docker compose` starts the full stack: PLC emulator, PostgreSQL and SCADA in
+production mode. For a real plant remove the `plc-sim` service and set
+`PLC_HOST`/`PLC_PORT`. The image builds and tests the C++ core, runs as an
+unprivileged user and has a `HEALTHCHECK`.
 
 ## Production use
 
@@ -126,6 +140,8 @@ python run.py --no-db         # without PostgreSQL
   control commands require an `X-API-Token` header. Writes are allowed only for
   `writable: true` tags within `min..max`, and every command is journaled. No
   CDN or external fonts are used — the UI works on isolated control networks.
+- **Monitoring:** `/api/health` returns 200 or 503 (device or database down),
+  `/api/health/live` is a liveness probe.
 - **API:** see the table in the Russian README or the interactive docs at `/docs`.
 
 ## Build and test
@@ -133,7 +149,7 @@ python run.py --no-db         # without PostgreSQL
 ```bash
 pip install -r requirements-dev.txt
 python scripts/build_native.py                   # CMake + ctest
-python -m pytest -q                              # 69 tests, the emulator starts inside
+python -m pytest -q                              # 75 tests, the emulator starts inside
 SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q    # same on the Python core
 ruff check . && ruff format --check .
 ```

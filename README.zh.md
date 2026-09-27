@@ -69,9 +69,21 @@ python run.py --demo --open
 所有内容都在 `configs/config.yaml` 中描述。最小位号只需 `name` 和 `address`；字段与
 俄文 README 相同：`type`、`scale`、`offset`、`unit`、`min`、`max`、`alarm_hh`、
 `alarm_high`、`alarm_low`、`alarm_ll`、`deadband`、`on_delay_s`、`group`、`widget`、
-`writable`、`ml`、`label: {ru, en, zh}`。启动时会校验配置，并逐条给出带路径的错误。
+`writable`、`ml`、`label: {ru, en, zh}`。启动时会校验配置，并逐条给出带路径的错误。配置值可取自环境变量：`host: ${PLC_HOST:-localhost}`。
 在 **“生成器”** 页面可粘贴任意装置的 YAML（内置锅炉房示例），立即查看工艺画面并下载
 SVG 或 JSON。
+
+## Docker
+
+```bash
+docker build -t scada-generator .
+docker run --rm -p 127.0.0.1:8000:8000 scada-generator        # 演示
+SCADA_API_TOKEN=secret DB_PASSWORD=pass docker compose up --build
+```
+
+`docker compose` 启动完整环境：PLC 仿真器、PostgreSQL 和生产模式的 SCADA。用于真实装置时
+删除 `plc-sim` 服务并设置 `PLC_HOST`/`PLC_PORT`。镜像会构建并测试 C++ 内核，以非特权用户
+运行，并带有 `HEALTHCHECK`。
 
 ## 生产环境
 
@@ -87,6 +99,7 @@ python run.py --no-db         # 不使用 PostgreSQL
 - **安全**：默认只监听 `127.0.0.1`；设置 `SCADA_API_TOKEN` 后，控制命令需要
   `X-API-Token` 请求头；只允许写入 `writable: true` 且在 `min..max` 范围内的位号；
   界面不依赖 CDN 和外部字体，可在隔离的工控网络中使用。
+- **监控**：`/api/health` 返回 200 或 503（设备或数据库不可用），`/api/health/live` 为存活探针。
 - **API**：见俄文 README 中的表格，或访问 `/docs` 查看交互式文档。
 
 ## 构建与测试
@@ -94,7 +107,7 @@ python run.py --no-db         # 不使用 PostgreSQL
 ```bash
 pip install -r requirements-dev.txt
 python scripts/build_native.py                   # CMake + ctest
-python -m pytest -q                              # 69 个测试，仿真器在测试内启动
+python -m pytest -q                              # 75 个测试，仿真器在测试内启动
 SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q    # 在 Python 内核上运行相同测试
 ```
 
