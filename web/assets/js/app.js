@@ -83,6 +83,25 @@ function paramsText(p, device) {
 const insightText = (ins) => t(ins.code, paramsText(ins.params, ins.device_id));
 const alarmText = (a) => t(a.message?.code || "", paramsText(a.message?.params || {}, a.device_id));
 
+// ---------- тема: светлая / тёмная / как в системе ----------
+function themeChoice() {
+  try {
+    const v = localStorage.getItem("scada.theme");
+    return ["light", "dark", "auto"].includes(v) ? v : "auto";
+  } catch { return "auto"; }
+}
+
+function setTheme(choice) {
+  const light = choice === "light" || (choice === "auto" && window.matchMedia("(prefers-color-scheme: light)").matches);
+  document.documentElement.dataset.theme = light ? "light" : "dark";
+  try { localStorage.setItem("scada.theme", choice); } catch { /* нет хранилища */ }
+  $$("#theme-switch button").forEach((b) => {
+    const on = b.dataset.themeSet === choice;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-checked", String(on));
+  });
+}
+
 // ---------- навигация ----------
 function showView(view) {
   if (!document.getElementById(`view-${view}`)) view = "overview";
@@ -494,11 +513,12 @@ function bindEvents() {
     await setLang(b.dataset.lang);
     renderAll();
   }));
-  $("#theme-btn").addEventListener("click", () => {
-    const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-    document.documentElement.dataset.theme = next;
-    try { localStorage.setItem("scada.theme", next); } catch { /* нет хранилища */ }
+  $$("#theme-switch button").forEach((b) => b.addEventListener("click", () => {
+    setTheme(b.dataset.themeSet);
     renderAll();
+  }));
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener?.("change", () => {
+    if (themeChoice() === "auto") { setTheme("auto"); renderAll(); }
   });
   $("#dr-close").addEventListener("click", closeDrawer);
   $("#scrim").addEventListener("click", closeDrawer);
@@ -585,11 +605,7 @@ function renderAll() {
 }
 
 async function main() {
-  try {
-    const theme = localStorage.getItem("scada.theme");
-    if (theme) document.documentElement.dataset.theme = theme;
-    else if (window.matchMedia("(prefers-color-scheme: light)").matches) document.documentElement.dataset.theme = "light";
-  } catch { /* нет хранилища */ }
+  setTheme(themeChoice());
 
   const [meta, hmi] = await Promise.all([api("/api/meta"), api("/api/hmi")]);
   state.meta = meta;

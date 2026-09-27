@@ -130,6 +130,12 @@ svg { display: block; }
 .lang { display: flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; }
 .lang button { background: none; border: 0; padding: 5px 10px; cursor: pointer; font-size: 12.5px; color: var(--muted); }
 .lang button.active { background: var(--panel-2); color: var(--text); font-weight: 600; }
+.theme-switch { display: flex; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; }
+.theme-switch button { display: flex; align-items: center; gap: 6px; background: none; border: 0; padding: 5px 10px; cursor: pointer; color: var(--muted); font-size: 12.5px; }
+.theme-switch button + button { border-left: 1px solid var(--line-2); }
+.theme-switch button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.theme-switch button.active { background: var(--panel-2); color: var(--text); font-weight: 600; }
+.theme-switch button:focus-visible, .lang button:focus-visible { outline: 2px solid var(--ml); outline-offset: -2px; }
 .icon-btn { background: none; border: 1px solid var(--line-2); border-radius: 8px; width: 34px; height: 34px; display: grid; place-items: center; cursor: pointer; color: var(--muted); }
 .icon-btn:hover { color: var(--text); }
 .icon-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
@@ -156,7 +162,7 @@ h3.sub { font-size: 13px; color: var(--muted); font-weight: 600; margin: 18px 0 
 .kpi b { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .kpi.ml b { color: var(--ml); }
 .kpi.alert b { color: var(--high); }
-.kpi b.lvl { font-size: 17px; line-height: 1.9; overflow-wrap: anywhere; }
+.kpi b.lvl { font-size: 15px; line-height: 2.1; overflow-wrap: break-word; hyphens: auto; }
 
 .btn {
   background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 8px;
@@ -399,6 +405,7 @@ h3.sub { font-size: 13px; color: var(--muted); font-weight: 600; margin: 18px 0 
   .menu-btn { display: grid; }
   .grid-2, .trend-grid, .gen { grid-template-columns: 1fr; }
   .clock { display: none; }
+  .theme-switch span { display: none; }
 }
 @media (max-width: 640px) {
   .views { padding: 14px 16px 30px; }
