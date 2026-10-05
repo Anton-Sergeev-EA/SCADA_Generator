@@ -1,5 +1,25 @@
 # SCADA Generator
 
+**Config-driven industrial monitoring prototype: multi-protocol acquisition, generated HMI, alarm lifecycle engineering, predictive pre-alarms, and C++17 streaming analytics.**
+
+> **Portfolio signal:** OT/SCADA engineering + industrial analytics. Performance and early-warning numbers in this repository are measurements from the included simulator/test scenarios; they are not field-validation claims.
+
+## Engineering evidence at a glance
+
+- HMI generated from plant configuration rather than hand-authored screens.
+- Acquisition layer spanning **Modbus TCP/RTU, OPC UA, MQTT and IEC 60870-5-104** adapters.
+- Alarm lifecycle with hysteresis, delay and acknowledgement concepts plus alarm KPI reporting.
+- Native **C++17** streaming detector and Holt trend forecast exposed to Python, with a Python fallback/parity path.
+- Multivariate **PCA/MSPC** analytics for relationship violations and tag contribution analysis.
+- End-to-end demo uses a physical pump-station model plus a real local Modbus TCP server.
+- Automated scenarios make early-warning and false-positive behaviour inspectable instead of relying on screenshots.
+
+## What a reviewer should inspect first
+
+Start with the acquisition drivers, alarm state machine, native analytics core, native/fallback parity tests, and automated ML/demo scenarios. Those areas best demonstrate the bridge between industrial automation and software/ML engineering.
+
+---
+
 [Русский](README.md) · **English** · [中文](README.zh.md)
 
 > The SCADA that **builds itself** from a YAML description of the plant and
