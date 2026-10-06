@@ -20,7 +20,7 @@ Start with the acquisition drivers, alarm state machine, native analytics core, 
 
 ---
 
-[Русский](README.md) · **English** · [中文](README.zh.md)
+[Русский](README.md) · **English** · [中文](README.zh.md) · [हिन्दी](README.hi.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Italiano](README.it.md)
 
 > The SCADA that **builds itself** from a YAML description of the plant and
 > **warns you in advance** — minutes before an alarm fires.
