@@ -1,6 +1,6 @@
 # SCADA Generator
 
-[Русский](README.md) · [English](README.en.md) · **中文**
+[Русский](README.md) · [English](README.en.md) · **中文** · [हिन्दी](README.hi.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Italiano](README.it.md)
 
 > 根据装置的 YAML 描述**自动生成**，并在报警触发前数分钟**提前预警**的 SCADA。
 

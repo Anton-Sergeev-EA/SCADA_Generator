@@ -1,6 +1,6 @@
 # SCADA Generator
 
-**Русский** · [English](README.en.md) · [中文](README.zh.md)
+**Русский** · [English](README.en.md) · [中文](README.zh.md) · [हिन्दी](README.hi.md) · [Español](README.es.md) · [Français](README.fr.md) · [Deutsch](README.de.md) · [Italiano](README.it.md)
 
 > SCADA, которая **строит себя сама** из YAML-описания установки и **предупреждает
 > заранее** — за минуты до того, как сработает аларм.
