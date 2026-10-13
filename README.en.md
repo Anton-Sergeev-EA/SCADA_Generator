@@ -219,4 +219,4 @@ ruff check . && ruff format --check .
 
 ## License
 
-MIT — see [LICENSE.md](LICENSE.md). Contact: Anton Sergeev · kavery@mail.ru
+MIT — see [LICENSE.md](LICENSE.md). Contact: Anton Sergeev · avsergeev1981@gmail.com

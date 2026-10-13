@@ -148,4 +148,4 @@ SCADA_FORCE_PYTHON_CORE=1 python -m pytest -q    # 在 Python 内核上运行相
 
 ## 许可证
 
-MIT — 见 [LICENSE.md](LICENSE.md)。联系人：Anton Sergeev · kavery@mail.ru
+MIT — 见 [LICENSE.md](LICENSE.md)。联系人：Anton Sergeev · avsergeev1981@gmail.com

@@ -340,4 +340,4 @@ MIT — см. [LICENSE.md](LICENSE.md).
 
 ## Контакты
 
-Сергеев Антон Валентинович · kavery@mail.ru
+Сергеев Антон Валентинович · avsergeev1981@gmail.com
